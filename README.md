@@ -13,19 +13,13 @@ Obsidian 图谱节点动态着色插件。根据笔记关联的"源点"种类，
 
 ## 安装
 
-1. 编译插件：
-   ```bash
-   npm install
-   npm run build
-   ```
-
-2. 复制 `main.js` 和 `manifest.json` 到 Obsidian 插件目录：
+1. 下载 `main.js` 和 `manifest.json` 两个文件
+2. 复制到 Obsidian 插件目录：
    ```
    <vault>/.obsidian/plugins/graph-source-color/
    ├── manifest.json
    └── main.js
    ```
-
 3. 重启 Obsidian，在设置中启用 "Graph Source Color" 插件
 
 ## 配置
