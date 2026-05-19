@@ -1,6 +1,7 @@
-import { App, Plugin, PluginSettingTab, Setting, Notice } from 'obsidian';
+import { App, Plugin, PluginSettingTab, Setting, Notice, TFolder } from 'obsidian';
 import { SourceDetector, SourceDetectorSettings, DEFAULT_SETTINGS as SOURCE_DEFAULT_SETTINGS } from './sourceDetector';
 import { ColorManager } from './colorManager';
+import { FolderTreeSelector } from './folderTreeSelector';
 
 interface GraphColorGroup {
 	query: string;
@@ -16,8 +17,22 @@ const DEFAULT_SETTINGS: GraphSourceColorSettings = {
 	enableMultiColor: true
 };
 
+const COLOR_PALETTE = [
+	'#4A90D9', '#F5A623', '#7B68EE', '#50C878', '#FF6B6B',
+	'#FFD93D', '#6BCB77', '#4D96FF', '#C084FC', '#FB923C',
+	'#34D399', '#F472B6', '#60A5FA', '#A78BFA', '#38BDF8'
+];
+
 function rgbNumberToHex(rgb: number): string {
 	return '#' + rgb.toString(16).padStart(6, '0');
+}
+
+function getNextColor(existingColors: Set<string>): string {
+	for (const color of COLOR_PALETTE) {
+		if (!existingColors.has(color)) return color;
+	}
+	const hue = Math.floor(Math.random() * 360);
+	return '#' + ((1 << 24) + (hue << 16) + (0x65 << 8) + 0x55).toString(16).slice(1);
 }
 
 export default class GraphSourceColorPlugin extends Plugin {
@@ -28,17 +43,21 @@ export default class GraphSourceColorPlugin extends Plugin {
 	private renderRAF: number | null = null;
 	private lastColorSync = 0;
 	private removing = false;
+	// graph.json 中用户手动设置的 colorGroup 路径 → 颜色
+	private obsidianColorMap: Map<string, string> = new Map();
 
 	async onload() {
 		await this.loadSettings();
 
 		this.app.workspace.onLayoutReady(async () => {
 			this.removing = false;
+			await this.migrateSettings();
 			this.sourceDetector = new SourceDetector(this.app, this.settings);
 			this.colorManager = new ColorManager(this.app, this.sourceDetector);
 			console.log('[Graph Source Color] Initialized');
 
 			await this.restoreColorsFromGraphJson();
+			await this.loadObsidianColorMap();
 			this.startOverlayRender();
 		});
 
@@ -91,11 +110,47 @@ export default class GraphSourceColorPlugin extends Plugin {
 			this.colorManager.refresh();
 		}
 		if (!this.settings.enableMultiColor) {
-			// Just clear overlay and restore nodes, don't stop render loop
 			this.clearOverlaysAndRestoreNodes();
 		} else {
-			// Re-enable: ensure overlays are set up
 			this.setupOverlays();
+		}
+	}
+
+	private async migrateSettings(): Promise<void> {
+		const loadedData = await this.loadData();
+		if (!loadedData) return;
+
+		let migrated = false;
+
+		if (loadedData.sourceFolder !== undefined && loadedData.sourceFolders === undefined) {
+			const oldFolder = loadedData.sourceFolder as string;
+			loadedData.sourceFolders = oldFolder ? [oldFolder] : [];
+			delete loadedData.sourceFolder;
+			migrated = true;
+
+			const newGroupColors: Record<string, string> = {};
+			for (const [oldGroup, color] of Object.entries(loadedData.groupColors || {})) {
+				if (oldFolder) {
+					const candidatePath = oldFolder + '/' + oldGroup;
+					const exists = this.app.vault.getAbstractFileByPath(candidatePath) instanceof TFolder;
+					if (exists) {
+						newGroupColors[candidatePath] = color as string;
+					} else if (!newGroupColors[oldFolder]) {
+						newGroupColors[oldFolder] = color as string;
+					}
+				} else {
+					newGroupColors[oldGroup] = color as string;
+				}
+			}
+			if (oldFolder && !newGroupColors[oldFolder]) {
+				newGroupColors[oldFolder] = '#4A90D9';
+			}
+			loadedData.groupColors = newGroupColors;
+		}
+
+		if (migrated) {
+			await this.saveData(loadedData);
+			this.settings = Object.assign({}, DEFAULT_SETTINGS, loadedData);
 		}
 	}
 
@@ -106,17 +161,16 @@ export default class GraphSourceColorPlugin extends Plugin {
 			const existingGroups = (await this.readExistingColorGroups()) ?? [];
 			if (existingGroups.length === 0) return;
 
-			const pathColorMap = new Map<string, string>();
 			for (const cg of existingGroups) {
-				if (cg.query?.startsWith('path:') && cg.color?.rgb !== undefined && cg.color?.rgb !== 0 && cg.color?.rgb !== 0xFFFFFF) {
-					pathColorMap.set(cg.query.replace('path:', '') + '.md', '#' + cg.color.rgb.toString(16).padStart(6, '0'));
-				}
-			}
+				if (!cg.query?.startsWith('path:')) continue;
+				if (cg.color?.rgb === undefined || cg.color?.rgb === 0 || cg.color?.rgb === 0xFFFFFF) continue;
 
-			for (const source of this.sourceDetector.getAllSources()) {
-				const color = pathColorMap.get(source.path);
-				if (color && color !== '#000000' && color !== '#ffffff') {
-					this.settings.groupColors[source.group] = color;
+				const queryPath = cg.query.replace('path:', '');
+				if (this.settings.sourceFolders.includes(queryPath)) {
+					const color = '#' + cg.color.rgb.toString(16).padStart(6, '0');
+					if (color !== '#000000' && color !== '#ffffff') {
+						this.settings.groupColors[queryPath] = color;
+					}
 				}
 			}
 
@@ -142,73 +196,116 @@ export default class GraphSourceColorPlugin extends Plugin {
 		}
 	}
 
-	private getSourceColorsFromRenderer(): Map<string, string> {
-		const colorMap = new Map<string, string>();
-
-		for (const viewType of ['graph', 'localgraph']) {
-			this.app.workspace.getLeavesOfType(viewType).forEach((leaf) => {
-				const view = leaf.view as any;
-				const renderer = view.dataEngine?.renderer;
-				if (!renderer?.nodes) return;
-
-				for (const node of renderer.nodes) {
-					if (!node.id || !this.sourceDetector?.isSourcePath(node.id)) continue;
-					if (node.circle?.tint !== undefined && node.circle?.tint !== 0xFFFFFF && node.circle?.tint !== 0x000000) {
-						colorMap.set(node.id, rgbNumberToHex(node.circle.tint));
-					}
-				}
-			});
+	/**
+	 * 从 graph.json 读取用户手动设置的 colorGroup，构建 路径→颜色 映射
+	 */
+	private async loadObsidianColorMap(): Promise<void> {
+		const newMap = new Map<string, string>();
+		const groups = await this.readExistingColorGroups();
+		if (!groups) {
+			this.obsidianColorMap = newMap;
+			return;
 		}
-
-		return colorMap;
-	}
-
-	private syncColorsFromRenderer(): boolean {
-		if (!this.sourceDetector) return false;
-
-		const tintMap = this.getSourceColorsFromRenderer();
-		if (tintMap.size === 0) return false;
-
-		let changed = false;
-		for (const source of this.sourceDetector.getAllSources()) {
-			const tintColor = tintMap.get(source.path);
-			if (tintColor && tintColor !== '#000000' && this.settings.groupColors[source.group] !== tintColor) {
-				this.settings.groupColors[source.group] = tintColor;
-				changed = true;
+		for (const cg of groups) {
+			if (!cg.query) continue;
+			if (cg.color?.rgb === undefined || cg.color?.rgb === 0 || cg.color?.rgb === 0xFFFFFF) continue;
+			const color = '#' + cg.color.rgb.toString(16).padStart(6, '0');
+			if (color === '#000000' || color === '#ffffff') continue;
+			const pathMatch = cg.query.match(/^path:(\S+)/);
+			if (!pathMatch) continue;
+			const pathPart = pathMatch[1];
+			const fileMatch = cg.query.match(/\bfile:(\S+)/);
+			if (fileMatch) {
+				const filePath = pathPart + '/' + fileMatch[1] + '.md';
+				newMap.set(filePath, color);
+			} else {
+				newMap.set(pathPart, color);
 			}
 		}
-
-		if (changed) {
-			console.log('[Graph Source Color] Synced from tint:', JSON.stringify(this.settings.groupColors));
-			this.sourceDetector.updateSettings(this.settings);
-			this.saveData(this.settings);
-			this.colorManager.refresh();
-		}
-
-		return changed;
+		this.obsidianColorMap = newMap;
 	}
 
-	private getNodeColorsLive(nodeId: string, tintMap: Map<string, string>): string[] {
+	/**
+	 * 判断某个路径是否在 graph.json 中有用户手动设置的 colorGroup
+	 * 支持 .md 后缀匹配（graph.json 不含 .md，node.id 含 .md）
+	 */
+	private hasObsidianColorGroup(path: string): boolean {
+		for (const groupPath of this.obsidianColorMap.keys()) {
+			if (path === groupPath) return true;
+			if (path === groupPath + '.md') return true;
+			if (path.endsWith('.md') && path.slice(0, -3) === groupPath) return true;
+			const prefix = groupPath.endsWith('/') ? groupPath : groupPath + '/';
+			if (path.startsWith(prefix)) return true;
+		}
+		return false;
+	}
+
+	/**
+	 * 获取某个路径在 graph.json 中用户设置的颜色
+	 */
+	private getObsidianColor(path: string): string | undefined {
+		for (const [groupPath, color] of this.obsidianColorMap) {
+			if (path === groupPath) return color;
+			if (path === groupPath + '.md') return color;
+			if (path.endsWith('.md') && path.slice(0, -3) === groupPath) return color;
+		}
+		return undefined;
+	}
+
+	/**
+	 * 获取源点的有效颜色（Obsidian 设置优先 > 插件文件夹色）
+	 */
+	private getEffectiveSourceColor(sourcePath: string): string | undefined {
+		// 1. Obsidian 手动设置的颜色最优先
+		const obsColor = this.getObsidianColor(sourcePath);
+		if (obsColor) return obsColor;
+		// 2. 插件文件夹颜色
+		const sourceInfo = this.sourceDetector?.getSourceInfo(sourcePath);
+		return sourceInfo?.color || undefined;
+	}
+
+	/**
+	 * 获取子节点的颜色数组（多源点多色，Obsidian 设置优先）
+	 */
+	private getChildNodeColors(nodeId: string): string[] {
 		if (!this.sourceDetector || !this.colorManager) return [];
 
 		const info = this.colorManager.getNodeColorInfo(nodeId);
 		if (!info || info.sources.length === 0) return [];
 
 		const colorSet: string[] = [];
-		const seenGroups = new Set<string>();
+		const seenColors = new Set<string>();
 
 		for (const source of info.sources) {
-			if (seenGroups.has(source.group)) continue;
-			seenGroups.add(source.group);
-
-			const tintColor = tintMap.get(source.path);
-			const color = tintColor || source.color;
-			if (color) {
+			const color = this.getEffectiveSourceColor(source.path);
+			if (color && !seenColors.has(color)) {
+				seenColors.add(color);
 				colorSet.push(color);
 			}
 		}
 
 		return colorSet;
+	}
+
+	private syncColorsFromRenderer(): boolean {
+		this.loadObsidianColorMap();
+		return false;
+	}
+
+	private getNodeScreenPos(node: any, scale: number, panX: number, panY: number, nodeScale: number): { x: number; y: number; r: number } {
+		if (node.circle && typeof node.circle.getBounds === 'function') {
+			const bounds = node.circle.getBounds();
+			return {
+				x: bounds.x + bounds.width / 2,
+				y: bounds.y + bounds.height / 2,
+				r: bounds.width / 2
+			};
+		}
+		return {
+			x: node.x * scale + panX,
+			y: node.y * scale + panY,
+			r: 3 * nodeScale * scale
+		};
 	}
 
 	// --- Canvas Overlay ---
@@ -313,13 +410,13 @@ export default class GraphSourceColorPlugin extends Plugin {
 
 		const renderLoop = () => {
 			if (this.removing) return;
-			this.renderMultiColorNodes();
+			this.renderOverlayNodes();
 			this.renderRAF = requestAnimationFrame(renderLoop);
 		};
 		this.renderRAF = requestAnimationFrame(renderLoop);
 	}
 
-	private renderMultiColorNodes(): void {
+	private renderOverlayNodes(): void {
 		if (!this.colorManager || !this.settings.enableMultiColor) return;
 
 		const now = Date.now();
@@ -327,8 +424,6 @@ export default class GraphSourceColorPlugin extends Plugin {
 			this.syncColorsFromRenderer();
 			this.lastColorSync = now;
 		}
-
-		const tintMap = this.getSourceColorsFromRenderer();
 
 		for (const viewType of ['graph', 'localgraph']) {
 			this.app.workspace.getLeavesOfType(viewType).forEach((leaf) => {
@@ -364,39 +459,57 @@ export default class GraphSourceColorPlugin extends Plugin {
 				for (const node of renderer.nodes) {
 					if (!node.id) continue;
 
-					// Source nodes: always let Obsidian handle
 					if (this.sourceDetector?.isSourcePath(node.id)) {
+						// 源点：Obsidian 手动设了颜色 → 不动，让 Obsidian 渲染
+						if (this.hasObsidianColorGroup(node.id)) {
+							if (node.circle && node.circle.alpha === 0) node.circle.alpha = 1;
+							continue;
+						}
+						// 插件文件夹色 → overlay 渲染
+						const folderColor = this.getEffectiveSourceColor(node.id);
+						if (!folderColor) {
+							if (node.circle && node.circle.alpha === 0) node.circle.alpha = 1;
+							continue;
+						}
+						if (node.circle) node.circle.alpha = 0;
+						const pos = this.getNodeScreenPos(node, scale, panX, panY, nodeScale);
+						this.drawSingleColorNode(ctx, pos.x, pos.y, pos.r, folderColor);
+						continue;
+					}
+
+					// 子节点
+					const colors = this.getChildNodeColors(node.id);
+					if (colors.length === 0) {
 						if (node.circle && node.circle.alpha === 0) node.circle.alpha = 1;
 						continue;
 					}
 
-					const colors = this.getNodeColorsLive(node.id, tintMap);
-					if (colors.length <= 1) {
-						if (node.circle && node.circle.alpha === 0) node.circle.alpha = 1;
-						continue;
-					}
-
-					let screenX: number, screenY: number, radius: number;
-
-					if (node.circle && typeof node.circle.getBounds === 'function') {
-						const bounds = node.circle.getBounds();
-						screenX = bounds.x + bounds.width / 2;
-						screenY = bounds.y + bounds.height / 2;
-						radius = bounds.width / 2;
+					const pos = this.getNodeScreenPos(node, scale, panX, panY, nodeScale);
+					if (node.circle) node.circle.alpha = 0;
+					if (colors.length === 1) {
+						this.drawSingleColorNode(ctx, pos.x, pos.y, pos.r, colors[0]);
 					} else {
-						screenX = node.x * scale + panX;
-						screenY = node.y * scale + panY;
-						radius = 3 * nodeScale * scale;
+						this.drawMultiColorNode(ctx, pos.x, pos.y, pos.r, colors);
 					}
-
-					if (node.circle) {
-						node.circle.alpha = 0;
-					}
-
-					this.drawMultiColorNode(ctx, screenX, screenY, radius, colors);
 				}
 			});
 		}
+	}
+
+	private drawSingleColorNode(
+		ctx: CanvasRenderingContext2D,
+		x: number,
+		y: number,
+		radius: number,
+		color: string
+	): void {
+		ctx.beginPath();
+		ctx.arc(x, y, radius, 0, 2 * Math.PI);
+		ctx.fillStyle = color;
+		ctx.fill();
+		ctx.strokeStyle = '#333333';
+		ctx.lineWidth = 1;
+		ctx.stroke();
 	}
 
 	private drawMultiColorNode(
@@ -441,18 +554,22 @@ export default class GraphSourceColorPlugin extends Plugin {
 
 	private debugGraphNodes(): void {
 		console.log('=== Graph Source Color Debug ===');
-		console.log('Plugin groupColors:', JSON.stringify(this.settings.groupColors));
-
-		const tintMap = this.getSourceColorsFromRenderer();
-		console.log('PixiJS tint colors:', Object.fromEntries(tintMap));
+		console.log('Settings:', JSON.stringify(this.settings, null, 2));
+		console.log('Obsidian colorGroups:', Object.fromEntries(this.obsidianColorMap));
 
 		if (this.colorManager) {
 			const files = this.app.vault.getMarkdownFiles();
 			for (const file of files) {
-				const liveColors = this.getNodeColorsLive(file.path, tintMap);
-				if (liveColors.length > 0) {
-					const tag = liveColors.length > 1 ? 'MULTI' : 'single';
-					console.log(`  [${tag}] "${file.path}": colors=${JSON.stringify(liveColors)}`);
+				if (this.sourceDetector?.isSourcePath(file.path)) {
+					const effectiveColor = this.getEffectiveSourceColor(file.path);
+					const hasObsidian = this.hasObsidianColorGroup(file.path);
+					console.log(`  [SOURCE] "${file.path}": effectiveColor=${effectiveColor}, obsidianSet=${hasObsidian}`);
+				} else {
+					const colors = this.getChildNodeColors(file.path);
+					if (colors.length > 0) {
+						const tag = colors.length > 1 ? 'MULTI' : 'single';
+						console.log(`  [${tag}] "${file.path}": colors=${JSON.stringify(colors)}`);
+					}
 				}
 			}
 		}
@@ -491,20 +608,44 @@ class GraphSourceColorSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
-		new Setting(containerEl)
-			.setName('源点文件夹')
-			.setDesc('存放源点笔记的文件夹路径')
-			.addText(text => text
-				.setValue(this.plugin.settings.sourceFolder)
-				.onChange(async (value) => {
-					this.plugin.settings.sourceFolder = value;
-					await this.plugin.saveSettings();
-				}));
-
-		containerEl.createEl('h3', { text: '分组颜色' });
+		// 树形文件夹选择器
+		containerEl.createEl('h3', { text: '源点文件夹' });
 		containerEl.createEl('p', {
-			text: '源节点颜色请在 Obsidian 图谱设置中修改，修改后子节点颜色会自动联动',
+			text: '选择包含源点笔记的文件夹，每个文件夹对应一种颜色分组',
 			cls: 'setting-item-description'
 		});
+
+		const treeContainer = containerEl.createDiv({ cls: 'folder-tree-container' });
+		const treeSelector = new FolderTreeSelector(this.app, treeContainer, this.plugin.settings.sourceFolders);
+		treeSelector.onCheckChange = async (checkedFolders: string[]) => {
+			this.plugin.settings.sourceFolders = checkedFolders;
+			for (const folder of checkedFolders) {
+				if (!this.plugin.settings.groupColors[folder]) {
+					const usedColors = new Set(Object.values(this.plugin.settings.groupColors));
+					this.plugin.settings.groupColors[folder] = getNextColor(usedColors);
+				}
+			}
+			await this.plugin.saveSettings();
+			this.display();
+		};
+
+		// 分组颜色
+		containerEl.createEl('h3', { text: '分组颜色' });
+		containerEl.createEl('p', {
+			text: '为源点文件夹设置颜色，源点节点和子节点都会使用对应颜色',
+			cls: 'setting-item-description'
+		});
+
+		for (const folder of this.plugin.settings.sourceFolders) {
+			const color = this.plugin.settings.groupColors[folder] || '#4A90D9';
+			new Setting(containerEl)
+				.setName(folder)
+				.addColorPicker(picker => picker
+					.setValue(color)
+					.onChange(async (value) => {
+						this.plugin.settings.groupColors[folder] = value;
+						await this.plugin.saveSettings();
+					}));
+		}
 	}
 }

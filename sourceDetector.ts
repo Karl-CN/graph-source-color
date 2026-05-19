@@ -1,4 +1,4 @@
-import { App, TFile, MetadataCache, Vault } from 'obsidian';
+import { App, TFile, TFolder } from 'obsidian';
 
 export interface SourceInfo {
     file: TFile;
@@ -8,15 +8,14 @@ export interface SourceInfo {
 }
 
 export interface SourceDetectorSettings {
-    sourceFolder: string;
+    sourceFolders: string[];
     groupColors: Record<string, string>;
 }
 
 export const DEFAULT_SETTINGS: SourceDetectorSettings = {
-    sourceFolder: 'wiki/sources',
+    sourceFolders: ['wiki/sources'],
     groupColors: {
-        'gov-report': '#4A90D9',
-        'april-meeting': '#F5A623',
+        'wiki/sources': '#4A90D9',
     },
 };
 
@@ -35,30 +34,33 @@ export class SourceDetector {
 
     /**
      * 构建源点缓存
-     * 包含所有有 group 的源点，即使没有配置颜色
-     * 无颜色的源点 color 为空串，不参与着色但仍在缓存中以便识别
+     * 文件夹下的所有文件自动成为源点，group = 文件夹路径
      */
     buildSourceCache(): void {
         this.sourceCache.clear();
         this.childMap.clear();
 
         const files = this.app.vault.getMarkdownFiles();
-        const sourceFolder = this.settings.sourceFolder;
+        const sourceFolders = this.settings.sourceFolders;
 
-        // 1. 构建源点缓存
+        // 1. 按 sourceFolders 识别源点，group = 最长匹配的文件夹路径
         for (const file of files) {
-            if (file.path.startsWith(sourceFolder)) {
-                const cache = this.app.metadataCache.getFileCache(file);
-                const group = cache?.frontmatter?.group;
-
-                if (group) {
-                    this.sourceCache.set(file.path, {
-                        file: file,
-                        path: file.path,
-                        group: group,
-                        color: this.getGroupColor(group)
-                    });
+            let bestFolder = '';
+            for (const folder of sourceFolders) {
+                const prefix = folder.endsWith('/') ? folder : folder + '/';
+                if (file.path.startsWith(prefix) || file.path === folder + '.md') {
+                    if (folder.length > bestFolder.length) {
+                        bestFolder = folder;
+                    }
                 }
+            }
+            if (bestFolder) {
+                this.sourceCache.set(file.path, {
+                    file: file,
+                    path: file.path,
+                    group: bestFolder,
+                    color: this.resolveFolderColor(bestFolder)
+                });
             }
         }
 
@@ -81,7 +83,7 @@ export class SourceDetector {
             }
         }
 
-        // 2b. 从非源点笔记的出链反向建立关联（笔记链接到源点的情况）
+        // 2b. 从非源点笔记的出链反向建立关联
         const excludePaths = new Set(['wiki/index.md']);
         for (const file of files) {
             if (this.sourceCache.has(file.path)) continue;
@@ -103,7 +105,6 @@ export class SourceDetector {
         }
 
         // 3. 沿 concept 之间的链接传播源点关系
-        // 如果 A 是源点 S 的子节点，A 链接到 B，则 B 也关联源点 S
         this.propagateSources();
     }
 
@@ -115,7 +116,6 @@ export class SourceDetector {
         const queue: string[] = [];
         const visited = new Set<string>();
 
-        // 初始：childMap 中已有直接关联的节点入队
         for (const path of this.childMap.keys()) {
             queue.push(path);
             visited.add(path);
@@ -136,7 +136,6 @@ export class SourceDetector {
                 const resolved = this.app.metadataCache.getFirstLinkpathDest(link.link, currentPath);
                 if (!resolved) continue;
                 const resolvedPath = resolved.path;
-                // 排除源点
                 if (this.sourceCache.has(resolvedPath)) continue;
 
                 let changed = false;
@@ -160,10 +159,27 @@ export class SourceDetector {
     }
 
     /**
-     * 获取 group 对应的颜色，未配置返回空串
+     * 获取 group 对应的颜色
      */
     getGroupColor(group: string): string {
         return this.settings.groupColors[group] || '';
+    }
+
+    /**
+     * 解析文件夹颜色，含继承逻辑
+     * 1. 如果 groupColors[folder] 有值 → 返回该值
+     * 2. 否则向上查找父文件夹，递归继承
+     * 3. 都没有 → 返回空串
+     */
+    resolveFolderColor(folder: string): string {
+        const color = this.settings.groupColors[folder];
+        if (color) return color;
+
+        // 向上查找父文件夹
+        const lastSlash = folder.lastIndexOf('/');
+        if (lastSlash <= 0) return '';
+        const parent = folder.substring(0, lastSlash);
+        return this.resolveFolderColor(parent);
     }
 
     /**
@@ -203,10 +219,9 @@ export class SourceDetector {
     }
 
     /**
-     * 获取笔记关联的所有源点（基于源点的出链方向）
+     * 获取笔记关联的所有源点
      */
     getLinkedSources(file: TFile): SourceInfo[] {
-        const seenGroups = new Set<string>();
         const linkedSources: SourceInfo[] = [];
 
         const sourcePaths = this.childMap.get(file.path);
@@ -214,9 +229,8 @@ export class SourceDetector {
 
         for (const sourcePath of sourcePaths) {
             const sourceInfo = this.sourceCache.get(sourcePath);
-            if (sourceInfo && !seenGroups.has(sourceInfo.group)) {
+            if (sourceInfo) {
                 linkedSources.push(sourceInfo);
-                seenGroups.add(sourceInfo.group);
             }
         }
 
@@ -227,11 +241,6 @@ export class SourceDetector {
      * 通过路径获取关联的所有源点
      */
     getLinkedSourcesByPath(path: string): SourceInfo[] {
-        return this.getLinkedSourcesByPathInternal(path);
-    }
-
-    private getLinkedSourcesByPathInternal(path: string): SourceInfo[] {
-        const seenGroups = new Set<string>();
         const linkedSources: SourceInfo[] = [];
 
         const sourcePaths = this.childMap.get(path);
@@ -239,9 +248,8 @@ export class SourceDetector {
 
         for (const sourcePath of sourcePaths) {
             const sourceInfo = this.sourceCache.get(sourcePath);
-            if (sourceInfo && !seenGroups.has(sourceInfo.group)) {
+            if (sourceInfo) {
                 linkedSources.push(sourceInfo);
-                seenGroups.add(sourceInfo.group);
             }
         }
 

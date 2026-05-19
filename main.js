@@ -27,15 +27,14 @@ __export(main_exports, {
   default: () => GraphSourceColorPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian2 = require("obsidian");
+var import_obsidian3 = require("obsidian");
 
 // sourceDetector.ts
 var import_obsidian = require("obsidian");
 var DEFAULT_SETTINGS = {
-  sourceFolder: "wiki/sources",
+  sourceFolders: ["wiki/sources"],
   groupColors: {
-    "gov-report": "#4A90D9",
-    "april-meeting": "#F5A623"
+    "wiki/sources": "#4A90D9"
   }
 };
 var SourceDetector = class {
@@ -49,27 +48,30 @@ var SourceDetector = class {
   }
   /**
    * 构建源点缓存
-   * 包含所有有 group 的源点，即使没有配置颜色
-   * 无颜色的源点 color 为空串，不参与着色但仍在缓存中以便识别
+   * 文件夹下的所有文件自动成为源点，group = 文件夹路径
    */
   buildSourceCache() {
-    var _a;
     this.sourceCache.clear();
     this.childMap.clear();
     const files = this.app.vault.getMarkdownFiles();
-    const sourceFolder = this.settings.sourceFolder;
+    const sourceFolders = this.settings.sourceFolders;
     for (const file of files) {
-      if (file.path.startsWith(sourceFolder)) {
-        const cache = this.app.metadataCache.getFileCache(file);
-        const group = (_a = cache == null ? void 0 : cache.frontmatter) == null ? void 0 : _a.group;
-        if (group) {
-          this.sourceCache.set(file.path, {
-            file,
-            path: file.path,
-            group,
-            color: this.getGroupColor(group)
-          });
+      let bestFolder = "";
+      for (const folder of sourceFolders) {
+        const prefix = folder.endsWith("/") ? folder : folder + "/";
+        if (file.path.startsWith(prefix) || file.path === folder + ".md") {
+          if (folder.length > bestFolder.length) {
+            bestFolder = folder;
+          }
         }
+      }
+      if (bestFolder) {
+        this.sourceCache.set(file.path, {
+          file,
+          path: file.path,
+          group: bestFolder,
+          color: this.resolveFolderColor(bestFolder)
+        });
       }
     }
     for (const [sourcePath, sourceInfo] of this.sourceCache) {
@@ -160,10 +162,26 @@ var SourceDetector = class {
     }
   }
   /**
-   * 获取 group 对应的颜色，未配置返回空串
+   * 获取 group 对应的颜色
    */
   getGroupColor(group) {
     return this.settings.groupColors[group] || "";
+  }
+  /**
+   * 解析文件夹颜色，含继承逻辑
+   * 1. 如果 groupColors[folder] 有值 → 返回该值
+   * 2. 否则向上查找父文件夹，递归继承
+   * 3. 都没有 → 返回空串
+   */
+  resolveFolderColor(folder) {
+    const color = this.settings.groupColors[folder];
+    if (color)
+      return color;
+    const lastSlash = folder.lastIndexOf("/");
+    if (lastSlash <= 0)
+      return "";
+    const parent = folder.substring(0, lastSlash);
+    return this.resolveFolderColor(parent);
   }
   /**
    * 检查文件是否为源点
@@ -197,19 +215,17 @@ var SourceDetector = class {
     this.buildSourceCache();
   }
   /**
-   * 获取笔记关联的所有源点（基于源点的出链方向）
+   * 获取笔记关联的所有源点
    */
   getLinkedSources(file) {
-    const seenGroups = /* @__PURE__ */ new Set();
     const linkedSources = [];
     const sourcePaths = this.childMap.get(file.path);
     if (!sourcePaths)
       return linkedSources;
     for (const sourcePath of sourcePaths) {
       const sourceInfo = this.sourceCache.get(sourcePath);
-      if (sourceInfo && !seenGroups.has(sourceInfo.group)) {
+      if (sourceInfo) {
         linkedSources.push(sourceInfo);
-        seenGroups.add(sourceInfo.group);
       }
     }
     return linkedSources;
@@ -218,19 +234,14 @@ var SourceDetector = class {
    * 通过路径获取关联的所有源点
    */
   getLinkedSourcesByPath(path) {
-    return this.getLinkedSourcesByPathInternal(path);
-  }
-  getLinkedSourcesByPathInternal(path) {
-    const seenGroups = /* @__PURE__ */ new Set();
     const linkedSources = [];
     const sourcePaths = this.childMap.get(path);
     if (!sourcePaths)
       return linkedSources;
     for (const sourcePath of sourcePaths) {
       const sourceInfo = this.sourceCache.get(sourcePath);
-      if (sourceInfo && !seenGroups.has(sourceInfo.group)) {
+      if (sourceInfo) {
         linkedSources.push(sourceInfo);
-        seenGroups.add(sourceInfo.group);
       }
     }
     return linkedSources;
@@ -283,30 +294,145 @@ var ColorManager = class {
   }
 };
 
+// folderTreeSelector.ts
+var import_obsidian2 = require("obsidian");
+var FolderTreeSelector = class {
+  constructor(app, containerEl, initialChecked) {
+    this.tree = [];
+    this.onCheckChange = () => {
+    };
+    this.app = app;
+    this.containerEl = containerEl;
+    this.checkedFolders = new Set(initialChecked);
+    this.buildTree();
+    this.render();
+  }
+  buildTree() {
+    const root = this.app.vault.getRoot();
+    this.tree = this.buildNodes(root);
+  }
+  buildNodes(parent) {
+    const nodes = [];
+    for (const child of parent.children) {
+      if (child instanceof import_obsidian2.TFolder) {
+        const node = {
+          path: child.path,
+          name: child.name,
+          children: this.buildNodes(child),
+          checked: this.checkedFolders.has(child.path),
+          expanded: this.checkedFolders.has(child.path)
+        };
+        nodes.push(node);
+      }
+    }
+    nodes.sort((a, b) => {
+      if (a.children.length > 0 && b.children.length === 0)
+        return -1;
+      if (a.children.length === 0 && b.children.length > 0)
+        return 1;
+      return a.name.localeCompare(b.name);
+    });
+    return nodes;
+  }
+  render() {
+    this.containerEl.empty();
+    this.containerEl.addClass("folder-tree");
+    for (const node of this.tree) {
+      this.renderNode(node, this.containerEl);
+    }
+  }
+  renderNode(node, container) {
+    const item = container.createDiv({ cls: "folder-tree-item" });
+    const row = item.createDiv({ cls: "folder-tree-row" });
+    const toggle = row.createSpan({ cls: "folder-tree-toggle" });
+    if (node.children.length > 0) {
+      toggle.setText(node.expanded ? "\u25BE" : "\u25B8");
+      toggle.addEventListener("click", () => {
+        node.expanded = !node.expanded;
+        toggle.setText(node.expanded ? "\u25BE" : "\u25B8");
+        if (childContainer) {
+          childContainer.style.display = node.expanded ? "block" : "none";
+        }
+      });
+    } else {
+      toggle.setText(" ");
+      toggle.style.visibility = "hidden";
+    }
+    const checkbox = row.createEl("input", { type: "checkbox" });
+    checkbox.addClass("folder-tree-checkbox");
+    checkbox.checked = node.checked;
+    checkbox.addEventListener("change", () => {
+      node.checked = checkbox.checked;
+      if (node.checked) {
+        this.checkedFolders.add(node.path);
+      } else {
+        this.checkedFolders.delete(node.path);
+      }
+      this.onCheckChange(Array.from(this.checkedFolders));
+    });
+    row.createSpan({ text: node.name, cls: "folder-tree-name" });
+    let childContainer = null;
+    if (node.children.length > 0) {
+      childContainer = item.createDiv({ cls: "folder-tree-children" });
+      if (!node.expanded)
+        childContainer.style.display = "none";
+      for (const child of node.children) {
+        this.renderNode(child, childContainer);
+      }
+    }
+  }
+};
+
 // main.ts
 var DEFAULT_SETTINGS2 = {
   ...DEFAULT_SETTINGS,
   enableMultiColor: true
 };
-function rgbNumberToHex(rgb) {
-  return "#" + rgb.toString(16).padStart(6, "0");
+var COLOR_PALETTE = [
+  "#4A90D9",
+  "#F5A623",
+  "#7B68EE",
+  "#50C878",
+  "#FF6B6B",
+  "#FFD93D",
+  "#6BCB77",
+  "#4D96FF",
+  "#C084FC",
+  "#FB923C",
+  "#34D399",
+  "#F472B6",
+  "#60A5FA",
+  "#A78BFA",
+  "#38BDF8"
+];
+function getNextColor(existingColors) {
+  for (const color of COLOR_PALETTE) {
+    if (!existingColors.has(color))
+      return color;
+  }
+  const hue = Math.floor(Math.random() * 360);
+  return "#" + ((1 << 24) + (hue << 16) + (101 << 8) + 85).toString(16).slice(1);
 }
-var GraphSourceColorPlugin = class extends import_obsidian2.Plugin {
+var GraphSourceColorPlugin = class extends import_obsidian3.Plugin {
   constructor() {
     super(...arguments);
     this.overlayCanvases = /* @__PURE__ */ new Map();
     this.renderRAF = null;
     this.lastColorSync = 0;
     this.removing = false;
+    // graph.json 中用户手动设置的 colorGroup 路径 → 颜色
+    this.obsidianColorMap = /* @__PURE__ */ new Map();
   }
   async onload() {
     await this.loadSettings();
     this.app.workspace.onLayoutReady(async () => {
       this.removing = false;
+      await this.migrateSettings();
       this.sourceDetector = new SourceDetector(this.app, this.settings);
       this.colorManager = new ColorManager(this.app, this.sourceDetector);
       console.log("[Graph Source Color] Initialized");
       await this.restoreColorsFromGraphJson();
+      await this.loadObsidianColorMap();
       this.startOverlayRender();
     });
     this.registerEvent(
@@ -326,7 +452,7 @@ var GraphSourceColorPlugin = class extends import_obsidian2.Plugin {
       callback: () => {
         if (this.colorManager)
           this.colorManager.refresh();
-        new import_obsidian2.Notice("\u56FE\u8C31\u989C\u8272\u5DF2\u5237\u65B0");
+        new import_obsidian3.Notice("\u56FE\u8C31\u989C\u8272\u5DF2\u5237\u65B0");
       }
     });
     this.addCommand({
@@ -358,6 +484,40 @@ var GraphSourceColorPlugin = class extends import_obsidian2.Plugin {
       this.setupOverlays();
     }
   }
+  async migrateSettings() {
+    const loadedData = await this.loadData();
+    if (!loadedData)
+      return;
+    let migrated = false;
+    if (loadedData.sourceFolder !== void 0 && loadedData.sourceFolders === void 0) {
+      const oldFolder = loadedData.sourceFolder;
+      loadedData.sourceFolders = oldFolder ? [oldFolder] : [];
+      delete loadedData.sourceFolder;
+      migrated = true;
+      const newGroupColors = {};
+      for (const [oldGroup, color] of Object.entries(loadedData.groupColors || {})) {
+        if (oldFolder) {
+          const candidatePath = oldFolder + "/" + oldGroup;
+          const exists = this.app.vault.getAbstractFileByPath(candidatePath) instanceof import_obsidian3.TFolder;
+          if (exists) {
+            newGroupColors[candidatePath] = color;
+          } else if (!newGroupColors[oldFolder]) {
+            newGroupColors[oldFolder] = color;
+          }
+        } else {
+          newGroupColors[oldGroup] = color;
+        }
+      }
+      if (oldFolder && !newGroupColors[oldFolder]) {
+        newGroupColors[oldFolder] = "#4A90D9";
+      }
+      loadedData.groupColors = newGroupColors;
+    }
+    if (migrated) {
+      await this.saveData(loadedData);
+      this.settings = Object.assign({}, DEFAULT_SETTINGS2, loadedData);
+    }
+  }
   async restoreColorsFromGraphJson() {
     var _a, _b, _c, _d, _e;
     if (!this.sourceDetector)
@@ -366,16 +526,17 @@ var GraphSourceColorPlugin = class extends import_obsidian2.Plugin {
       const existingGroups = (_a = await this.readExistingColorGroups()) != null ? _a : [];
       if (existingGroups.length === 0)
         return;
-      const pathColorMap = /* @__PURE__ */ new Map();
       for (const cg of existingGroups) {
-        if (((_b = cg.query) == null ? void 0 : _b.startsWith("path:")) && ((_c = cg.color) == null ? void 0 : _c.rgb) !== void 0 && ((_d = cg.color) == null ? void 0 : _d.rgb) !== 0 && ((_e = cg.color) == null ? void 0 : _e.rgb) !== 16777215) {
-          pathColorMap.set(cg.query.replace("path:", "") + ".md", "#" + cg.color.rgb.toString(16).padStart(6, "0"));
-        }
-      }
-      for (const source of this.sourceDetector.getAllSources()) {
-        const color = pathColorMap.get(source.path);
-        if (color && color !== "#000000" && color !== "#ffffff") {
-          this.settings.groupColors[source.group] = color;
+        if (!((_b = cg.query) == null ? void 0 : _b.startsWith("path:")))
+          continue;
+        if (((_c = cg.color) == null ? void 0 : _c.rgb) === void 0 || ((_d = cg.color) == null ? void 0 : _d.rgb) === 0 || ((_e = cg.color) == null ? void 0 : _e.rgb) === 16777215)
+          continue;
+        const queryPath = cg.query.replace("path:", "");
+        if (this.settings.sourceFolders.includes(queryPath)) {
+          const color = "#" + cg.color.rgb.toString(16).padStart(6, "0");
+          if (color !== "#000000" && color !== "#ffffff") {
+            this.settings.groupColors[queryPath] = color;
+          }
         }
       }
       this.sourceDetector.updateSettings(this.settings);
@@ -400,67 +561,120 @@ var GraphSourceColorPlugin = class extends import_obsidian2.Plugin {
       return null;
     }
   }
-  getSourceColorsFromRenderer() {
-    const colorMap = /* @__PURE__ */ new Map();
-    for (const viewType of ["graph", "localgraph"]) {
-      this.app.workspace.getLeavesOfType(viewType).forEach((leaf) => {
-        var _a, _b, _c, _d, _e;
-        const view = leaf.view;
-        const renderer = (_a = view.dataEngine) == null ? void 0 : _a.renderer;
-        if (!(renderer == null ? void 0 : renderer.nodes))
-          return;
-        for (const node of renderer.nodes) {
-          if (!node.id || !((_b = this.sourceDetector) == null ? void 0 : _b.isSourcePath(node.id)))
-            continue;
-          if (((_c = node.circle) == null ? void 0 : _c.tint) !== void 0 && ((_d = node.circle) == null ? void 0 : _d.tint) !== 16777215 && ((_e = node.circle) == null ? void 0 : _e.tint) !== 0) {
-            colorMap.set(node.id, rgbNumberToHex(node.circle.tint));
-          }
-        }
-      });
+  /**
+   * 从 graph.json 读取用户手动设置的 colorGroup，构建 路径→颜色 映射
+   */
+  async loadObsidianColorMap() {
+    var _a, _b, _c;
+    const newMap = /* @__PURE__ */ new Map();
+    const groups = await this.readExistingColorGroups();
+    if (!groups) {
+      this.obsidianColorMap = newMap;
+      return;
     }
-    return colorMap;
-  }
-  syncColorsFromRenderer() {
-    if (!this.sourceDetector)
-      return false;
-    const tintMap = this.getSourceColorsFromRenderer();
-    if (tintMap.size === 0)
-      return false;
-    let changed = false;
-    for (const source of this.sourceDetector.getAllSources()) {
-      const tintColor = tintMap.get(source.path);
-      if (tintColor && tintColor !== "#000000" && this.settings.groupColors[source.group] !== tintColor) {
-        this.settings.groupColors[source.group] = tintColor;
-        changed = true;
+    for (const cg of groups) {
+      if (!cg.query)
+        continue;
+      if (((_a = cg.color) == null ? void 0 : _a.rgb) === void 0 || ((_b = cg.color) == null ? void 0 : _b.rgb) === 0 || ((_c = cg.color) == null ? void 0 : _c.rgb) === 16777215)
+        continue;
+      const color = "#" + cg.color.rgb.toString(16).padStart(6, "0");
+      if (color === "#000000" || color === "#ffffff")
+        continue;
+      const pathMatch = cg.query.match(/^path:(\S+)/);
+      if (!pathMatch)
+        continue;
+      const pathPart = pathMatch[1];
+      const fileMatch = cg.query.match(/\bfile:(\S+)/);
+      if (fileMatch) {
+        const filePath = pathPart + "/" + fileMatch[1] + ".md";
+        newMap.set(filePath, color);
+      } else {
+        newMap.set(pathPart, color);
       }
     }
-    if (changed) {
-      console.log("[Graph Source Color] Synced from tint:", JSON.stringify(this.settings.groupColors));
-      this.sourceDetector.updateSettings(this.settings);
-      this.saveData(this.settings);
-      this.colorManager.refresh();
-    }
-    return changed;
+    this.obsidianColorMap = newMap;
   }
-  getNodeColorsLive(nodeId, tintMap) {
+  /**
+   * 判断某个路径是否在 graph.json 中有用户手动设置的 colorGroup
+   * 支持 .md 后缀匹配（graph.json 不含 .md，node.id 含 .md）
+   */
+  hasObsidianColorGroup(path) {
+    for (const groupPath of this.obsidianColorMap.keys()) {
+      if (path === groupPath)
+        return true;
+      if (path === groupPath + ".md")
+        return true;
+      if (path.endsWith(".md") && path.slice(0, -3) === groupPath)
+        return true;
+      const prefix = groupPath.endsWith("/") ? groupPath : groupPath + "/";
+      if (path.startsWith(prefix))
+        return true;
+    }
+    return false;
+  }
+  /**
+   * 获取某个路径在 graph.json 中用户设置的颜色
+   */
+  getObsidianColor(path) {
+    for (const [groupPath, color] of this.obsidianColorMap) {
+      if (path === groupPath)
+        return color;
+      if (path === groupPath + ".md")
+        return color;
+      if (path.endsWith(".md") && path.slice(0, -3) === groupPath)
+        return color;
+    }
+    return void 0;
+  }
+  /**
+   * 获取源点的有效颜色（Obsidian 设置优先 > 插件文件夹色）
+   */
+  getEffectiveSourceColor(sourcePath) {
+    var _a;
+    const obsColor = this.getObsidianColor(sourcePath);
+    if (obsColor)
+      return obsColor;
+    const sourceInfo = (_a = this.sourceDetector) == null ? void 0 : _a.getSourceInfo(sourcePath);
+    return (sourceInfo == null ? void 0 : sourceInfo.color) || void 0;
+  }
+  /**
+   * 获取子节点的颜色数组（多源点多色，Obsidian 设置优先）
+   */
+  getChildNodeColors(nodeId) {
     if (!this.sourceDetector || !this.colorManager)
       return [];
     const info = this.colorManager.getNodeColorInfo(nodeId);
     if (!info || info.sources.length === 0)
       return [];
     const colorSet = [];
-    const seenGroups = /* @__PURE__ */ new Set();
+    const seenColors = /* @__PURE__ */ new Set();
     for (const source of info.sources) {
-      if (seenGroups.has(source.group))
-        continue;
-      seenGroups.add(source.group);
-      const tintColor = tintMap.get(source.path);
-      const color = tintColor || source.color;
-      if (color) {
+      const color = this.getEffectiveSourceColor(source.path);
+      if (color && !seenColors.has(color)) {
+        seenColors.add(color);
         colorSet.push(color);
       }
     }
     return colorSet;
+  }
+  syncColorsFromRenderer() {
+    this.loadObsidianColorMap();
+    return false;
+  }
+  getNodeScreenPos(node, scale, panX, panY, nodeScale) {
+    if (node.circle && typeof node.circle.getBounds === "function") {
+      const bounds = node.circle.getBounds();
+      return {
+        x: bounds.x + bounds.width / 2,
+        y: bounds.y + bounds.height / 2,
+        r: bounds.width / 2
+      };
+    }
+    return {
+      x: node.x * scale + panX,
+      y: node.y * scale + panY,
+      r: 3 * nodeScale * scale
+    };
   }
   // --- Canvas Overlay ---
   setupOverlays() {
@@ -563,12 +777,12 @@ var GraphSourceColorPlugin = class extends import_obsidian2.Plugin {
     const renderLoop = () => {
       if (this.removing)
         return;
-      this.renderMultiColorNodes();
+      this.renderOverlayNodes();
       this.renderRAF = requestAnimationFrame(renderLoop);
     };
     this.renderRAF = requestAnimationFrame(renderLoop);
   }
-  renderMultiColorNodes() {
+  renderOverlayNodes() {
     if (!this.colorManager || !this.settings.enableMultiColor)
       return;
     const now = Date.now();
@@ -576,7 +790,6 @@ var GraphSourceColorPlugin = class extends import_obsidian2.Plugin {
       this.syncColorsFromRenderer();
       this.lastColorSync = now;
     }
-    const tintMap = this.getSourceColorsFromRenderer();
     for (const viewType of ["graph", "localgraph"]) {
       this.app.workspace.getLeavesOfType(viewType).forEach((leaf) => {
         var _a, _b, _c;
@@ -610,34 +823,49 @@ var GraphSourceColorPlugin = class extends import_obsidian2.Plugin {
           if (!node.id)
             continue;
           if ((_c = this.sourceDetector) == null ? void 0 : _c.isSourcePath(node.id)) {
+            if (this.hasObsidianColorGroup(node.id)) {
+              if (node.circle && node.circle.alpha === 0)
+                node.circle.alpha = 1;
+              continue;
+            }
+            const folderColor = this.getEffectiveSourceColor(node.id);
+            if (!folderColor) {
+              if (node.circle && node.circle.alpha === 0)
+                node.circle.alpha = 1;
+              continue;
+            }
+            if (node.circle)
+              node.circle.alpha = 0;
+            const pos2 = this.getNodeScreenPos(node, scale, panX, panY, nodeScale);
+            this.drawSingleColorNode(ctx, pos2.x, pos2.y, pos2.r, folderColor);
+            continue;
+          }
+          const colors = this.getChildNodeColors(node.id);
+          if (colors.length === 0) {
             if (node.circle && node.circle.alpha === 0)
               node.circle.alpha = 1;
             continue;
           }
-          const colors = this.getNodeColorsLive(node.id, tintMap);
-          if (colors.length <= 1) {
-            if (node.circle && node.circle.alpha === 0)
-              node.circle.alpha = 1;
-            continue;
-          }
-          let screenX, screenY, radius;
-          if (node.circle && typeof node.circle.getBounds === "function") {
-            const bounds = node.circle.getBounds();
-            screenX = bounds.x + bounds.width / 2;
-            screenY = bounds.y + bounds.height / 2;
-            radius = bounds.width / 2;
-          } else {
-            screenX = node.x * scale + panX;
-            screenY = node.y * scale + panY;
-            radius = 3 * nodeScale * scale;
-          }
-          if (node.circle) {
+          const pos = this.getNodeScreenPos(node, scale, panX, panY, nodeScale);
+          if (node.circle)
             node.circle.alpha = 0;
+          if (colors.length === 1) {
+            this.drawSingleColorNode(ctx, pos.x, pos.y, pos.r, colors[0]);
+          } else {
+            this.drawMultiColorNode(ctx, pos.x, pos.y, pos.r, colors);
           }
-          this.drawMultiColorNode(ctx, screenX, screenY, radius, colors);
         }
       });
     }
+  }
+  drawSingleColorNode(ctx, x, y, radius, color) {
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, 2 * Math.PI);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.strokeStyle = "#333333";
+    ctx.lineWidth = 1;
+    ctx.stroke();
   }
   drawMultiColorNode(ctx, x, y, radius, colors) {
     if (colors.length === 2) {
@@ -670,27 +898,33 @@ var GraphSourceColorPlugin = class extends import_obsidian2.Plugin {
   }
   // --- Debug ---
   debugGraphNodes() {
+    var _a;
     console.log("=== Graph Source Color Debug ===");
-    console.log("Plugin groupColors:", JSON.stringify(this.settings.groupColors));
-    const tintMap = this.getSourceColorsFromRenderer();
-    console.log("PixiJS tint colors:", Object.fromEntries(tintMap));
+    console.log("Settings:", JSON.stringify(this.settings, null, 2));
+    console.log("Obsidian colorGroups:", Object.fromEntries(this.obsidianColorMap));
     if (this.colorManager) {
       const files = this.app.vault.getMarkdownFiles();
       for (const file of files) {
-        const liveColors = this.getNodeColorsLive(file.path, tintMap);
-        if (liveColors.length > 0) {
-          const tag = liveColors.length > 1 ? "MULTI" : "single";
-          console.log(`  [${tag}] "${file.path}": colors=${JSON.stringify(liveColors)}`);
+        if ((_a = this.sourceDetector) == null ? void 0 : _a.isSourcePath(file.path)) {
+          const effectiveColor = this.getEffectiveSourceColor(file.path);
+          const hasObsidian = this.hasObsidianColorGroup(file.path);
+          console.log(`  [SOURCE] "${file.path}": effectiveColor=${effectiveColor}, obsidianSet=${hasObsidian}`);
+        } else {
+          const colors = this.getChildNodeColors(file.path);
+          if (colors.length > 0) {
+            const tag = colors.length > 1 ? "MULTI" : "single";
+            console.log(`  [${tag}] "${file.path}": colors=${JSON.stringify(colors)}`);
+          }
         }
       }
     }
     for (const [key, canvas] of this.overlayCanvases) {
       console.log(`Overlay canvas "${key}": ${canvas.width}x${canvas.height}`);
     }
-    new import_obsidian2.Notice("\u8C03\u8BD5\u4FE1\u606F\u5DF2\u8F93\u51FA\u5230\u63A7\u5236\u53F0");
+    new import_obsidian3.Notice("\u8C03\u8BD5\u4FE1\u606F\u5DF2\u8F93\u51FA\u5230\u63A7\u5236\u53F0");
   }
 };
-var GraphSourceColorSettingTab = class extends import_obsidian2.PluginSettingTab {
+var GraphSourceColorSettingTab = class extends import_obsidian3.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -699,18 +933,39 @@ var GraphSourceColorSettingTab = class extends import_obsidian2.PluginSettingTab
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "\u56FE\u8C31\u6E90\u70B9\u7740\u8272\u8BBE\u7F6E" });
-    new import_obsidian2.Setting(containerEl).setName("\u542F\u7528\u591A\u8272\u8282\u70B9").setDesc("\u4E3A\u94FE\u63A5\u591A\u4E2A\u6E90\u70B9\u7684\u7B14\u8BB0\u663E\u793A\u591A\u8272\u8282\u70B9").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableMultiColor).onChange(async (value) => {
+    new import_obsidian3.Setting(containerEl).setName("\u542F\u7528\u591A\u8272\u8282\u70B9").setDesc("\u4E3A\u94FE\u63A5\u591A\u4E2A\u6E90\u70B9\u7684\u7B14\u8BB0\u663E\u793A\u591A\u8272\u8282\u70B9").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableMultiColor).onChange(async (value) => {
       this.plugin.settings.enableMultiColor = value;
       await this.plugin.saveSettings();
     }));
-    new import_obsidian2.Setting(containerEl).setName("\u6E90\u70B9\u6587\u4EF6\u5939").setDesc("\u5B58\u653E\u6E90\u70B9\u7B14\u8BB0\u7684\u6587\u4EF6\u5939\u8DEF\u5F84").addText((text) => text.setValue(this.plugin.settings.sourceFolder).onChange(async (value) => {
-      this.plugin.settings.sourceFolder = value;
-      await this.plugin.saveSettings();
-    }));
-    containerEl.createEl("h3", { text: "\u5206\u7EC4\u989C\u8272" });
+    containerEl.createEl("h3", { text: "\u6E90\u70B9\u6587\u4EF6\u5939" });
     containerEl.createEl("p", {
-      text: "\u6E90\u8282\u70B9\u989C\u8272\u8BF7\u5728 Obsidian \u56FE\u8C31\u8BBE\u7F6E\u4E2D\u4FEE\u6539\uFF0C\u4FEE\u6539\u540E\u5B50\u8282\u70B9\u989C\u8272\u4F1A\u81EA\u52A8\u8054\u52A8",
+      text: "\u9009\u62E9\u5305\u542B\u6E90\u70B9\u7B14\u8BB0\u7684\u6587\u4EF6\u5939\uFF0C\u6BCF\u4E2A\u6587\u4EF6\u5939\u5BF9\u5E94\u4E00\u79CD\u989C\u8272\u5206\u7EC4",
       cls: "setting-item-description"
     });
+    const treeContainer = containerEl.createDiv({ cls: "folder-tree-container" });
+    const treeSelector = new FolderTreeSelector(this.app, treeContainer, this.plugin.settings.sourceFolders);
+    treeSelector.onCheckChange = async (checkedFolders) => {
+      this.plugin.settings.sourceFolders = checkedFolders;
+      for (const folder of checkedFolders) {
+        if (!this.plugin.settings.groupColors[folder]) {
+          const usedColors = new Set(Object.values(this.plugin.settings.groupColors));
+          this.plugin.settings.groupColors[folder] = getNextColor(usedColors);
+        }
+      }
+      await this.plugin.saveSettings();
+      this.display();
+    };
+    containerEl.createEl("h3", { text: "\u5206\u7EC4\u989C\u8272" });
+    containerEl.createEl("p", {
+      text: "\u4E3A\u6E90\u70B9\u6587\u4EF6\u5939\u8BBE\u7F6E\u989C\u8272\uFF0C\u6E90\u70B9\u8282\u70B9\u548C\u5B50\u8282\u70B9\u90FD\u4F1A\u4F7F\u7528\u5BF9\u5E94\u989C\u8272",
+      cls: "setting-item-description"
+    });
+    for (const folder of this.plugin.settings.sourceFolders) {
+      const color = this.plugin.settings.groupColors[folder] || "#4A90D9";
+      new import_obsidian3.Setting(containerEl).setName(folder).addColorPicker((picker) => picker.setValue(color).onChange(async (value) => {
+        this.plugin.settings.groupColors[folder] = value;
+        await this.plugin.saveSettings();
+      }));
+    }
   }
 };

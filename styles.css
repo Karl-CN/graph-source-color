@@ -1,0 +1,46 @@
+/* Graph Source Color Plugin Styles */
+
+.folder-tree-container {
+	max-height: 300px;
+	overflow-y: auto;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+	padding: 8px;
+	margin-bottom: 12px;
+}
+
+.folder-tree {
+	padding-left: 0;
+}
+
+.folder-tree-item {
+	list-style: none;
+}
+
+.folder-tree-row {
+	display: flex;
+	align-items: center;
+	padding: 2px 0;
+}
+
+.folder-tree-toggle {
+	cursor: pointer;
+	display: inline-block;
+	width: 16px;
+	text-align: center;
+	user-select: none;
+	flex-shrink: 0;
+}
+
+.folder-tree-checkbox {
+	margin-right: 6px;
+	flex-shrink: 0;
+}
+
+.folder-tree-name {
+	cursor: default;
+}
+
+.folder-tree-children {
+	padding-left: 20px;
+}
