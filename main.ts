@@ -1,4 +1,4 @@
-import { App, Plugin, PluginSettingTab, Setting, Notice, TFolder } from 'obsidian';
+﻿import { App, Plugin, PluginSettingTab, Setting, Notice, TFolder } from 'obsidian';
 import { SourceDetector, SourceDetectorSettings, DEFAULT_SETTINGS as SOURCE_DEFAULT_SETTINGS } from './sourceDetector';
 import { ColorManager } from './colorManager';
 import { FolderTreeSelector } from './folderTreeSelector';
@@ -43,8 +43,9 @@ export default class GraphSourceColorPlugin extends Plugin {
 	private renderRAF: number | null = null;
 	private lastColorSync = 0;
 	private removing = false;
-	// graph.json 中用户手动设置的 colorGroup 路径 → 颜色
 	private obsidianColorMap: Map<string, string> = new Map();
+	// 缓存 Obsidian 动态 alpha（我们设 alpha=0 后无法再读到原值）
+	private nodeAlphaCache: Map<string, number> = new Map();
 
 	async onload() {
 		await this.loadSettings();
@@ -196,9 +197,6 @@ export default class GraphSourceColorPlugin extends Plugin {
 		}
 	}
 
-	/**
-	 * 从 graph.json 读取用户手动设置的 colorGroup，构建 路径→颜色 映射
-	 */
 	private async loadObsidianColorMap(): Promise<void> {
 		const newMap = new Map<string, string>();
 		const groups = await this.readExistingColorGroups();
@@ -225,10 +223,6 @@ export default class GraphSourceColorPlugin extends Plugin {
 		this.obsidianColorMap = newMap;
 	}
 
-	/**
-	 * 判断某个路径是否在 graph.json 中有用户手动设置的 colorGroup
-	 * 支持 .md 后缀匹配（graph.json 不含 .md，node.id 含 .md）
-	 */
 	private hasObsidianColorGroup(path: string): boolean {
 		for (const groupPath of this.obsidianColorMap.keys()) {
 			if (path === groupPath) return true;
@@ -240,9 +234,6 @@ export default class GraphSourceColorPlugin extends Plugin {
 		return false;
 	}
 
-	/**
-	 * 获取某个路径在 graph.json 中用户设置的颜色
-	 */
 	private getObsidianColor(path: string): string | undefined {
 		for (const [groupPath, color] of this.obsidianColorMap) {
 			if (path === groupPath) return color;
@@ -252,21 +243,13 @@ export default class GraphSourceColorPlugin extends Plugin {
 		return undefined;
 	}
 
-	/**
-	 * 获取源点的有效颜色（Obsidian 设置优先 > 插件文件夹色）
-	 */
 	private getEffectiveSourceColor(sourcePath: string): string | undefined {
-		// 1. Obsidian 手动设置的颜色最优先
 		const obsColor = this.getObsidianColor(sourcePath);
 		if (obsColor) return obsColor;
-		// 2. 插件文件夹颜色
 		const sourceInfo = this.sourceDetector?.getSourceInfo(sourcePath);
 		return sourceInfo?.color || undefined;
 	}
 
-	/**
-	 * 获取子节点的颜色数组（多源点多色，Obsidian 设置优先）
-	 */
 	private getChildNodeColors(nodeId: string): string[] {
 		if (!this.sourceDetector || !this.colorManager) return [];
 
@@ -306,6 +289,22 @@ export default class GraphSourceColorPlugin extends Plugin {
 			y: node.y * scale + panY,
 			r: 3 * nodeScale * scale
 		};
+	}
+
+	/**
+	 * 获取节点的 Obsidian 动态 alpha
+	 * alpha > 0 时更新缓存（Obsidian 控制）
+	 * alpha === 0 时使用缓存（我们自己设的）
+	 */
+	private getNodeAlpha(nodeId: string, currentAlpha: number): number {
+		if (currentAlpha > 0) {
+			this.nodeAlphaCache.set(nodeId, currentAlpha);
+		}
+		return this.nodeAlphaCache.get(nodeId) ?? 1;
+	}
+
+	private releaseNodeAlpha(nodeId: string): void {
+		this.nodeAlphaCache.delete(nodeId);
 	}
 
 	// --- Canvas Overlay ---
@@ -459,37 +458,47 @@ export default class GraphSourceColorPlugin extends Plugin {
 				for (const node of renderer.nodes) {
 					if (!node.id) continue;
 
+					const currentAlpha = node.circle?.alpha ?? 1;
+					const nodeAlpha = this.getNodeAlpha(node.id, currentAlpha);
+
 					if (this.sourceDetector?.isSourcePath(node.id)) {
-						// 源点：Obsidian 手动设了颜色 → 不动，让 Obsidian 渲染
 						if (this.hasObsidianColorGroup(node.id)) {
 							if (node.circle && node.circle.alpha === 0) node.circle.alpha = 1;
+							this.releaseNodeAlpha(node.id);
 							continue;
 						}
-						// 插件文件夹色 → overlay 渲染
 						const folderColor = this.getEffectiveSourceColor(node.id);
 						if (!folderColor) {
 							if (node.circle && node.circle.alpha === 0) node.circle.alpha = 1;
+							this.releaseNodeAlpha(node.id);
 							continue;
 						}
 						if (node.circle) node.circle.alpha = 0;
 						const pos = this.getNodeScreenPos(node, scale, panX, panY, nodeScale);
-						this.drawSingleColorNode(ctx, pos.x, pos.y, pos.r, folderColor);
+						this.drawSingleColorNode(ctx, pos.x, pos.y, pos.r, folderColor, nodeAlpha);
 						continue;
 					}
 
-					// 子节点
+					// 子节点：Obsidian 手动设色优先
+					if (this.hasObsidianColorGroup(node.id)) {
+						if (node.circle && node.circle.alpha === 0) node.circle.alpha = 1;
+						this.releaseNodeAlpha(node.id);
+						continue;
+					}
+
 					const colors = this.getChildNodeColors(node.id);
 					if (colors.length === 0) {
 						if (node.circle && node.circle.alpha === 0) node.circle.alpha = 1;
+						this.releaseNodeAlpha(node.id);
 						continue;
 					}
 
 					const pos = this.getNodeScreenPos(node, scale, panX, panY, nodeScale);
 					if (node.circle) node.circle.alpha = 0;
 					if (colors.length === 1) {
-						this.drawSingleColorNode(ctx, pos.x, pos.y, pos.r, colors[0]);
+						this.drawSingleColorNode(ctx, pos.x, pos.y, pos.r, colors[0], nodeAlpha);
 					} else {
-						this.drawMultiColorNode(ctx, pos.x, pos.y, pos.r, colors);
+						this.drawMultiColorNode(ctx, pos.x, pos.y, pos.r, colors, nodeAlpha);
 					}
 				}
 			});
@@ -501,8 +510,10 @@ export default class GraphSourceColorPlugin extends Plugin {
 		x: number,
 		y: number,
 		radius: number,
-		color: string
+		color: string,
+		alpha: number
 	): void {
+		ctx.globalAlpha = alpha;
 		ctx.beginPath();
 		ctx.arc(x, y, radius, 0, 2 * Math.PI);
 		ctx.fillStyle = color;
@@ -510,6 +521,7 @@ export default class GraphSourceColorPlugin extends Plugin {
 		ctx.strokeStyle = '#333333';
 		ctx.lineWidth = 1;
 		ctx.stroke();
+		ctx.globalAlpha = 1;
 	}
 
 	private drawMultiColorNode(
@@ -517,8 +529,10 @@ export default class GraphSourceColorPlugin extends Plugin {
 		x: number,
 		y: number,
 		radius: number,
-		colors: string[]
+		colors: string[],
+		alpha: number
 	): void {
+		ctx.globalAlpha = alpha;
 		if (colors.length === 2) {
 			ctx.beginPath();
 			ctx.arc(x, y, radius, Math.PI / 2, 3 * Math.PI / 2);
@@ -548,6 +562,7 @@ export default class GraphSourceColorPlugin extends Plugin {
 		ctx.strokeStyle = '#333333';
 		ctx.lineWidth = 1;
 		ctx.stroke();
+		ctx.globalAlpha = 1;
 	}
 
 	// --- Debug ---
@@ -608,7 +623,6 @@ class GraphSourceColorSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
-		// 树形文件夹选择器
 		containerEl.createEl('h3', { text: '源点文件夹' });
 		containerEl.createEl('p', {
 			text: '选择包含源点笔记的文件夹，每个文件夹对应一种颜色分组',
@@ -629,7 +643,6 @@ class GraphSourceColorSettingTab extends PluginSettingTab {
 			this.display();
 		};
 
-		// 分组颜色
 		containerEl.createEl('h3', { text: '分组颜色' });
 		containerEl.createEl('p', {
 			text: '为源点文件夹设置颜色，源点节点和子节点都会使用对应颜色',
@@ -649,3 +662,4 @@ class GraphSourceColorSettingTab extends PluginSettingTab {
 		}
 	}
 }
+

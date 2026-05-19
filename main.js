@@ -420,8 +420,9 @@ var GraphSourceColorPlugin = class extends import_obsidian3.Plugin {
     this.renderRAF = null;
     this.lastColorSync = 0;
     this.removing = false;
-    // graph.json 中用户手动设置的 colorGroup 路径 → 颜色
     this.obsidianColorMap = /* @__PURE__ */ new Map();
+    // 缓存 Obsidian 动态 alpha（我们设 alpha=0 后无法再读到原值）
+    this.nodeAlphaCache = /* @__PURE__ */ new Map();
   }
   async onload() {
     await this.loadSettings();
@@ -561,9 +562,6 @@ var GraphSourceColorPlugin = class extends import_obsidian3.Plugin {
       return null;
     }
   }
-  /**
-   * 从 graph.json 读取用户手动设置的 colorGroup，构建 路径→颜色 映射
-   */
   async loadObsidianColorMap() {
     var _a, _b, _c;
     const newMap = /* @__PURE__ */ new Map();
@@ -594,10 +592,6 @@ var GraphSourceColorPlugin = class extends import_obsidian3.Plugin {
     }
     this.obsidianColorMap = newMap;
   }
-  /**
-   * 判断某个路径是否在 graph.json 中有用户手动设置的 colorGroup
-   * 支持 .md 后缀匹配（graph.json 不含 .md，node.id 含 .md）
-   */
   hasObsidianColorGroup(path) {
     for (const groupPath of this.obsidianColorMap.keys()) {
       if (path === groupPath)
@@ -612,9 +606,6 @@ var GraphSourceColorPlugin = class extends import_obsidian3.Plugin {
     }
     return false;
   }
-  /**
-   * 获取某个路径在 graph.json 中用户设置的颜色
-   */
   getObsidianColor(path) {
     for (const [groupPath, color] of this.obsidianColorMap) {
       if (path === groupPath)
@@ -626,9 +617,6 @@ var GraphSourceColorPlugin = class extends import_obsidian3.Plugin {
     }
     return void 0;
   }
-  /**
-   * 获取源点的有效颜色（Obsidian 设置优先 > 插件文件夹色）
-   */
   getEffectiveSourceColor(sourcePath) {
     var _a;
     const obsColor = this.getObsidianColor(sourcePath);
@@ -637,9 +625,6 @@ var GraphSourceColorPlugin = class extends import_obsidian3.Plugin {
     const sourceInfo = (_a = this.sourceDetector) == null ? void 0 : _a.getSourceInfo(sourcePath);
     return (sourceInfo == null ? void 0 : sourceInfo.color) || void 0;
   }
-  /**
-   * 获取子节点的颜色数组（多源点多色，Obsidian 设置优先）
-   */
   getChildNodeColors(nodeId) {
     if (!this.sourceDetector || !this.colorManager)
       return [];
@@ -675,6 +660,21 @@ var GraphSourceColorPlugin = class extends import_obsidian3.Plugin {
       y: node.y * scale + panY,
       r: 3 * nodeScale * scale
     };
+  }
+  /**
+   * 获取节点的 Obsidian 动态 alpha
+   * alpha > 0 时更新缓存（Obsidian 控制）
+   * alpha === 0 时使用缓存（我们自己设的）
+   */
+  getNodeAlpha(nodeId, currentAlpha) {
+    var _a;
+    if (currentAlpha > 0) {
+      this.nodeAlphaCache.set(nodeId, currentAlpha);
+    }
+    return (_a = this.nodeAlphaCache.get(nodeId)) != null ? _a : 1;
+  }
+  releaseNodeAlpha(nodeId) {
+    this.nodeAlphaCache.delete(nodeId);
   }
   // --- Canvas Overlay ---
   setupOverlays() {
@@ -792,7 +792,7 @@ var GraphSourceColorPlugin = class extends import_obsidian3.Plugin {
     }
     for (const viewType of ["graph", "localgraph"]) {
       this.app.workspace.getLeavesOfType(viewType).forEach((leaf) => {
-        var _a, _b, _c;
+        var _a, _b, _c, _d, _e;
         const view = leaf.view;
         const dataEngine = view.dataEngine;
         const renderer = dataEngine == null ? void 0 : dataEngine.renderer;
@@ -822,43 +822,55 @@ var GraphSourceColorPlugin = class extends import_obsidian3.Plugin {
         for (const node of renderer.nodes) {
           if (!node.id)
             continue;
-          if ((_c = this.sourceDetector) == null ? void 0 : _c.isSourcePath(node.id)) {
+          const currentAlpha = (_d = (_c = node.circle) == null ? void 0 : _c.alpha) != null ? _d : 1;
+          const nodeAlpha = this.getNodeAlpha(node.id, currentAlpha);
+          if ((_e = this.sourceDetector) == null ? void 0 : _e.isSourcePath(node.id)) {
             if (this.hasObsidianColorGroup(node.id)) {
               if (node.circle && node.circle.alpha === 0)
                 node.circle.alpha = 1;
+              this.releaseNodeAlpha(node.id);
               continue;
             }
             const folderColor = this.getEffectiveSourceColor(node.id);
             if (!folderColor) {
               if (node.circle && node.circle.alpha === 0)
                 node.circle.alpha = 1;
+              this.releaseNodeAlpha(node.id);
               continue;
             }
             if (node.circle)
               node.circle.alpha = 0;
             const pos2 = this.getNodeScreenPos(node, scale, panX, panY, nodeScale);
-            this.drawSingleColorNode(ctx, pos2.x, pos2.y, pos2.r, folderColor);
+            this.drawSingleColorNode(ctx, pos2.x, pos2.y, pos2.r, folderColor, nodeAlpha);
+            continue;
+          }
+          if (this.hasObsidianColorGroup(node.id)) {
+            if (node.circle && node.circle.alpha === 0)
+              node.circle.alpha = 1;
+            this.releaseNodeAlpha(node.id);
             continue;
           }
           const colors = this.getChildNodeColors(node.id);
           if (colors.length === 0) {
             if (node.circle && node.circle.alpha === 0)
               node.circle.alpha = 1;
+            this.releaseNodeAlpha(node.id);
             continue;
           }
           const pos = this.getNodeScreenPos(node, scale, panX, panY, nodeScale);
           if (node.circle)
             node.circle.alpha = 0;
           if (colors.length === 1) {
-            this.drawSingleColorNode(ctx, pos.x, pos.y, pos.r, colors[0]);
+            this.drawSingleColorNode(ctx, pos.x, pos.y, pos.r, colors[0], nodeAlpha);
           } else {
-            this.drawMultiColorNode(ctx, pos.x, pos.y, pos.r, colors);
+            this.drawMultiColorNode(ctx, pos.x, pos.y, pos.r, colors, nodeAlpha);
           }
         }
       });
     }
   }
-  drawSingleColorNode(ctx, x, y, radius, color) {
+  drawSingleColorNode(ctx, x, y, radius, color, alpha) {
+    ctx.globalAlpha = alpha;
     ctx.beginPath();
     ctx.arc(x, y, radius, 0, 2 * Math.PI);
     ctx.fillStyle = color;
@@ -866,8 +878,10 @@ var GraphSourceColorPlugin = class extends import_obsidian3.Plugin {
     ctx.strokeStyle = "#333333";
     ctx.lineWidth = 1;
     ctx.stroke();
+    ctx.globalAlpha = 1;
   }
-  drawMultiColorNode(ctx, x, y, radius, colors) {
+  drawMultiColorNode(ctx, x, y, radius, colors, alpha) {
+    ctx.globalAlpha = alpha;
     if (colors.length === 2) {
       ctx.beginPath();
       ctx.arc(x, y, radius, Math.PI / 2, 3 * Math.PI / 2);
@@ -895,6 +909,7 @@ var GraphSourceColorPlugin = class extends import_obsidian3.Plugin {
     ctx.strokeStyle = "#333333";
     ctx.lineWidth = 1;
     ctx.stroke();
+    ctx.globalAlpha = 1;
   }
   // --- Debug ---
   debugGraphNodes() {
