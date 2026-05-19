@@ -1,7 +1,7 @@
 {
   "id": "graph-source-color",
   "name": "Graph Source Color",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "minAppVersion": "0.15.0",
   "description": "根据源点笔记动态着色图谱节点",
   "author": "Claude Code + GLM-5.1",
