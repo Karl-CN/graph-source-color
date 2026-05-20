@@ -1,4 +1,4 @@
-﻿import { App, Plugin, PluginSettingTab, Setting, Notice, TFolder } from 'obsidian';
+import { App, Plugin, PluginSettingTab, Setting, Notice, TFolder, TFile } from 'obsidian';
 import { SourceDetector, SourceDetectorSettings, DEFAULT_SETTINGS as SOURCE_DEFAULT_SETTINGS } from './sourceDetector';
 import { ColorManager } from './colorManager';
 import { FolderTreeSelector } from './folderTreeSelector';
@@ -44,8 +44,8 @@ export default class GraphSourceColorPlugin extends Plugin {
 	private lastColorSync = 0;
 	private removing = false;
 	private obsidianColorMap: Map<string, string> = new Map();
-	// 缓存 Obsidian 动态 alpha（我们设 alpha=0 后无法再读到原值）
 	private nodeAlphaCache: Map<string, number> = new Map();
+	private deletedPaths: Set<string> = new Set();
 
 	async onload() {
 		await this.loadSettings();
@@ -64,6 +64,29 @@ export default class GraphSourceColorPlugin extends Plugin {
 
 		this.registerEvent(
 			this.app.metadataCache.on('changed', () => {
+				if (this.colorManager) this.colorManager.refresh();
+			})
+		);
+
+		this.registerEvent(
+			this.app.vault.on('delete', (file) => {
+				const deletedPath = file instanceof TFile ? file.path : '';
+				if (deletedPath) {
+					this.deletedPaths.add(deletedPath);
+					this.nodeAlphaCache.delete(deletedPath);
+				}
+				setTimeout(() => {
+					if (this.colorManager) this.colorManager.refresh();
+					setTimeout(() => {
+						if (this.colorManager) this.colorManager.refresh();
+						if (deletedPath) this.deletedPaths.delete(deletedPath);
+					}, 2000);
+				}, 500);
+			})
+		);
+
+		this.registerEvent(
+			this.app.vault.on('create', () => {
 				if (this.colorManager) this.colorManager.refresh();
 			})
 		);
@@ -291,11 +314,6 @@ export default class GraphSourceColorPlugin extends Plugin {
 		};
 	}
 
-	/**
-	 * 获取节点的 Obsidian 动态 alpha
-	 * alpha > 0 时更新缓存（Obsidian 控制）
-	 * alpha === 0 时使用缓存（我们自己设的）
-	 */
 	private getNodeAlpha(nodeId: string, currentAlpha: number): number {
 		if (currentAlpha > 0) {
 			this.nodeAlphaCache.set(nodeId, currentAlpha);
@@ -305,6 +323,11 @@ export default class GraphSourceColorPlugin extends Plugin {
 
 	private releaseNodeAlpha(nodeId: string): void {
 		this.nodeAlphaCache.delete(nodeId);
+	}
+
+	private isNodeAlive(nodeId: string): boolean {
+		if (this.deletedPaths.has(nodeId)) return false;
+		return !!this.app.vault.getAbstractFileByPath(nodeId);
 	}
 
 	// --- Canvas Overlay ---
@@ -409,7 +432,11 @@ export default class GraphSourceColorPlugin extends Plugin {
 
 		const renderLoop = () => {
 			if (this.removing) return;
-			this.renderOverlayNodes();
+			try {
+				this.renderOverlayNodes();
+			} catch (e) {
+				console.warn('[Graph Source Color] Render loop error:', e);
+			}
 			this.renderRAF = requestAnimationFrame(renderLoop);
 		};
 		this.renderRAF = requestAnimationFrame(renderLoop);
@@ -426,80 +453,98 @@ export default class GraphSourceColorPlugin extends Plugin {
 
 		for (const viewType of ['graph', 'localgraph']) {
 			this.app.workspace.getLeavesOfType(viewType).forEach((leaf) => {
-				const view = leaf.view as any;
-				const dataEngine = view.dataEngine;
-				const renderer = dataEngine?.renderer;
-				if (!renderer?.nodes) return;
+				try {
+					const view = leaf.view as any;
+					const dataEngine = view.dataEngine;
+					const renderer = dataEngine?.renderer;
+					if (!renderer?.nodes) return;
 
-				const key = (leaf as any).id ?? '';
-				const canvas = this.overlayCanvases.get(key);
-				if (!canvas) return;
+					const key = (leaf as any).id ?? '';
+					const canvas = this.overlayCanvases.get(key);
+					if (!canvas) return;
 
-				const ctx = canvas.getContext('2d');
-				if (!ctx) return;
+					const ctx = canvas.getContext('2d');
+					if (!ctx) return;
 
-				const pxRenderer = renderer.px?.renderer;
-				if (pxRenderer) {
-					const pw = pxRenderer.width;
-					const ph = pxRenderer.height;
-					if (canvas.width !== pw || canvas.height !== ph) {
-						canvas.width = pw;
-						canvas.height = ph;
-					}
-				}
-
-				ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-				const scale = renderer.scale || 1;
-				const panX = renderer.panX || 0;
-				const panY = renderer.panY || 0;
-				const nodeScale = renderer.nodeScale || 1;
-
-				for (const node of renderer.nodes) {
-					if (!node.id) continue;
-
-					const currentAlpha = node.circle?.alpha ?? 1;
-					const nodeAlpha = this.getNodeAlpha(node.id, currentAlpha);
-
-					if (this.sourceDetector?.isSourcePath(node.id)) {
-						if (this.hasObsidianColorGroup(node.id)) {
-							if (node.circle && node.circle.alpha === 0) node.circle.alpha = 1;
-							this.releaseNodeAlpha(node.id);
-							continue;
+					const pxRenderer = renderer.px?.renderer;
+					if (pxRenderer) {
+						const pw = pxRenderer.width;
+						const ph = pxRenderer.height;
+						if (canvas.width !== pw || canvas.height !== ph) {
+							canvas.width = pw;
+							canvas.height = ph;
 						}
-						const folderColor = this.getEffectiveSourceColor(node.id);
-						if (!folderColor) {
-							if (node.circle && node.circle.alpha === 0) node.circle.alpha = 1;
-							this.releaseNodeAlpha(node.id);
-							continue;
+					}
+
+					ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+					const scale = renderer.scale || 1;
+					const panX = renderer.panX || 0;
+					const panY = renderer.panY || 0;
+					const nodeScale = renderer.nodeScale || 1;
+
+					for (const node of renderer.nodes) {
+						try {
+							if (!node.id) continue;
+
+							// 跳过已删除文件的幽灵节点
+							if (!this.isNodeAlive(node.id)) {
+								if (node.circle && node.circle.alpha === 0) node.circle.alpha = 1;
+								this.releaseNodeAlpha(node.id);
+								continue;
+							}
+
+							const currentAlpha = node.circle?.alpha ?? 1;
+							const nodeAlpha = this.getNodeAlpha(node.id, currentAlpha);
+
+							if (this.sourceDetector?.isSourcePath(node.id)) {
+								if (this.hasObsidianColorGroup(node.id)) {
+									if (node.circle && node.circle.alpha === 0) node.circle.alpha = 1;
+									this.releaseNodeAlpha(node.id);
+									continue;
+								}
+								const folderColor = this.getEffectiveSourceColor(node.id);
+								if (!folderColor) {
+									if (node.circle && node.circle.alpha === 0) node.circle.alpha = 1;
+									this.releaseNodeAlpha(node.id);
+									continue;
+								}
+								if (node.circle) node.circle.alpha = 0;
+								const pos = this.getNodeScreenPos(node, scale, panX, panY, nodeScale);
+								this.drawSingleColorNode(ctx, pos.x, pos.y, pos.r, folderColor, nodeAlpha);
+								continue;
+							}
+
+							// 子节点：Obsidian 手动设色优先
+							if (this.hasObsidianColorGroup(node.id)) {
+								if (node.circle && node.circle.alpha === 0) node.circle.alpha = 1;
+								this.releaseNodeAlpha(node.id);
+								continue;
+							}
+
+							const colors = this.getChildNodeColors(node.id);
+							if (colors.length === 0) {
+								if (node.circle && node.circle.alpha === 0) node.circle.alpha = 1;
+								this.releaseNodeAlpha(node.id);
+								continue;
+							}
+
+							const pos = this.getNodeScreenPos(node, scale, panX, panY, nodeScale);
+							if (node.circle) node.circle.alpha = 0;
+							if (colors.length === 1) {
+								this.drawSingleColorNode(ctx, pos.x, pos.y, pos.r, colors[0], nodeAlpha);
+							} else {
+								this.drawMultiColorNode(ctx, pos.x, pos.y, pos.r, colors, nodeAlpha);
+							}
+						} catch (e) {
+							// 单个节点出错不影响其他节点
+							try {
+								if (node?.circle && node.circle.alpha === 0) node.circle.alpha = 1;
+							} catch {}
 						}
-						if (node.circle) node.circle.alpha = 0;
-						const pos = this.getNodeScreenPos(node, scale, panX, panY, nodeScale);
-						this.drawSingleColorNode(ctx, pos.x, pos.y, pos.r, folderColor, nodeAlpha);
-						continue;
 					}
-
-					// 子节点：Obsidian 手动设色优先
-					if (this.hasObsidianColorGroup(node.id)) {
-						if (node.circle && node.circle.alpha === 0) node.circle.alpha = 1;
-						this.releaseNodeAlpha(node.id);
-						continue;
-					}
-
-					const colors = this.getChildNodeColors(node.id);
-					if (colors.length === 0) {
-						if (node.circle && node.circle.alpha === 0) node.circle.alpha = 1;
-						this.releaseNodeAlpha(node.id);
-						continue;
-					}
-
-					const pos = this.getNodeScreenPos(node, scale, panX, panY, nodeScale);
-					if (node.circle) node.circle.alpha = 0;
-					if (colors.length === 1) {
-						this.drawSingleColorNode(ctx, pos.x, pos.y, pos.r, colors[0], nodeAlpha);
-					} else {
-						this.drawMultiColorNode(ctx, pos.x, pos.y, pos.r, colors, nodeAlpha);
-					}
+				} catch (e) {
+					console.warn('[Graph Source Color] View render error:', e);
 				}
 			});
 		}
@@ -571,6 +616,7 @@ export default class GraphSourceColorPlugin extends Plugin {
 		console.log('=== Graph Source Color Debug ===');
 		console.log('Settings:', JSON.stringify(this.settings, null, 2));
 		console.log('Obsidian colorGroups:', Object.fromEntries(this.obsidianColorMap));
+		console.log('Deleted paths:', Array.from(this.deletedPaths));
 
 		if (this.colorManager) {
 			const files = this.app.vault.getMarkdownFiles();
@@ -662,4 +708,3 @@ class GraphSourceColorSettingTab extends PluginSettingTab {
 		}
 	}
 }
-

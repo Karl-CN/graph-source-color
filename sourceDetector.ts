@@ -13,10 +13,8 @@ export interface SourceDetectorSettings {
 }
 
 export const DEFAULT_SETTINGS: SourceDetectorSettings = {
-    sourceFolders: ['wiki/sources'],
-    groupColors: {
-        'wiki/sources': '#4A90D9',
-    },
+    sourceFolders: [],
+    groupColors: {},
 };
 
 export class SourceDetector {
