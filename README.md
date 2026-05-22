@@ -61,6 +61,10 @@ Industry-Analysis.md
 Result: "Industry-Analysis" displays a two-color split node
 ```
 
+## Demo
+
+[View the interactive demo](demo.html) — Step-by-step animation showing how source colors propagate through links.
+
 ## Commands
 
 | Command | Description |

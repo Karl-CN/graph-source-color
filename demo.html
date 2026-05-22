@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>多色渲染示例</title>
+<style>
+  body { background: #1a1a2e; display: flex; flex-wrap: wrap; gap: 40px; justify-content: center; align-items: flex-start; padding: 30px; min-height: 100vh; margin: 0; }
+  canvas { display: block; }
+  .anim-wrap { position: relative; }
+  .anim-wrap button { position: absolute; bottom: 12px; right: 16px; background: rgba(255,255,255,0.15); color: #fff; border: 1px solid rgba(255,255,255,0.3); padding: 6px 18px; border-radius: 4px; cursor: pointer; font-size: 13px; font-family: monospace; }
+  .anim-wrap button:hover { background: rgba(255,255,255,0.25); }
+  .step-label { position: absolute; top: 12px; left: 16px; color: rgba(255,255,255,0.7); font: 13px monospace; pointer-events: none; }
+</style>
+</head>
+<body>
+
+<canvas id="canvas1" width="440" height="340"></canvas>
+<canvas id="canvas2" width="440" height="340"></canvas>
+<div class="anim-wrap">
+  <canvas id="canvas3" width="820" height="660"></canvas>
+  <div class="step-label" id="stepLabel"></div>
+  <button id="replayBtn">Replay</button>
+</div>
+
+<script>
+const BG = '#1a1a2e';
+const LINK_COLOR = 'rgba(255,255,255,0.22)';
+const BIDI_COLOR = 'rgba(255,255,255,0.30)';
+const LABEL_COLOR = '#fff';
+const purple = '#b021e4';
+const blue = '#152de5';
+const green = '#50C878';
+const YELLOW = '#f5f906';
+const RED = '#fe011b';
+const CYAN = '#0ac6f5';
+const srcR = 22;
+const childR = 18;
+const bigSrcR = 26;
+const bigChildR = 22;
+
+function drawSingleNode(ctx, cx, cy, r, color) {
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+}
+
+function drawTwoColorNode(ctx, cx, cy, r, c1, c2) {
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, Math.PI / 2, 3 * Math.PI / 2);
+  ctx.fillStyle = c1;
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, -Math.PI / 2, Math.PI / 2);
+  ctx.fillStyle = c2;
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+  ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+}
+
+function drawMultiColorNode(ctx, cx, cy, r, colors) {
+  const slice = (2 * Math.PI) / colors.length;
+  colors.forEach((c, i) => {
+    const s = -Math.PI / 2 + i * slice;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, r, s, s + slice);
+    ctx.closePath();
+    ctx.fillStyle = c;
+    ctx.fill();
+  });
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+  ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+}
+
+function drawColoredNode(ctx, x, y, r, colors) {
+  if (colors.length === 1) drawSingleNode(ctx, x, y, r, colors[0]);
+  else if (colors.length === 2) drawTwoColorNode(ctx, x, y, r, colors[0], colors[1]);
+  else drawMultiColorNode(ctx, x, y, r, colors);
+}
+
+function link(ctx, x1, y1, x2, y2, color) {
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.strokeStyle = color || 'rgba(0,0,0,0.15)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+}
+
+function drawLabel(ctx, x, y, label) {
+  ctx.save();
+  ctx.font = 'bold 12px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.strokeStyle = 'rgba(0,0,0,0.75)';
+  ctx.lineWidth = 3;
+  ctx.strokeText(label, x, y);
+  ctx.fillStyle = LABEL_COLOR;
+  ctx.fillText(label, x, y);
+  ctx.restore();
+}
+
+function arrowHead(ctx, ex, ey, angle, headLen, color) {
+  ctx.beginPath();
+  ctx.moveTo(ex, ey);
+  ctx.lineTo(ex - headLen * Math.cos(angle - Math.PI / 7), ey - headLen * Math.sin(angle - Math.PI / 7));
+  ctx.lineTo(ex - headLen * Math.cos(angle + Math.PI / 7), ey - headLen * Math.sin(angle + Math.PI / 7));
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.fill();
+}
+
+function drawArrow(ctx, x1, y1, r1, x2, y2, r2, color) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  const ux = dx / dist, uy = dy / dist;
+  const sx = x1 + ux * (r1 + 2), sy = y1 + uy * (r1 + 2);
+  const ex = x2 - ux * (r2 + 2), ey = y2 - uy * (r2 + 2);
+  ctx.beginPath();
+  ctx.moveTo(sx, sy);
+  ctx.lineTo(ex, ey);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+  arrowHead(ctx, ex, ey, Math.atan2(ey - sy, ex - sx), 7, color);
+}
+
+function drawBiArrow(ctx, x1, y1, r1, x2, y2, r2, color) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  const ux = dx / dist, uy = dy / dist;
+  const sx = x1 + ux * (r1 + 2), sy = y1 + uy * (r1 + 2);
+  const ex = x2 - ux * (r2 + 2), ey = y2 - uy * (r2 + 2);
+  ctx.beginPath();
+  ctx.moveTo(sx, sy);
+  ctx.lineTo(ex, ey);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+  const angle = Math.atan2(ey - sy, ex - sx);
+  arrowHead(ctx, ex, ey, angle, 7, color);
+  arrowHead(ctx, sx, sy, angle + Math.PI, 7, color);
+}
+
+// ========== 图1：双源点左右分割 ==========
+const c1 = document.getElementById('canvas1');
+const x1 = c1.getContext('2d');
+x1.fillStyle = BG; x1.fillRect(0, 0, c1.width, c1.height);
+
+const s1a = {x:120,y:70}, s1b = {x:320,y:70};
+const ch1a = {x:220,y:200}, ch1b = {x:110,y:250}, ch1c = {x:330,y:250};
+
+link(x1,s1a.x,s1a.y,ch1a.x,ch1a.y, LINK_COLOR); link(x1,s1a.x,s1a.y,ch1b.x,ch1b.y, LINK_COLOR); link(x1,s1a.x,s1a.y,ch1c.x,ch1c.y, LINK_COLOR);
+link(x1,s1b.x,s1b.y,ch1a.x,ch1a.y, LINK_COLOR); link(x1,s1b.x,s1b.y,ch1c.x,ch1c.y, LINK_COLOR);
+
+drawSingleNode(x1, s1a.x, s1a.y, srcR, purple);
+drawSingleNode(x1, s1b.x, s1b.y, srcR, blue);
+drawTwoColorNode(x1, ch1a.x, ch1a.y, childR, purple, blue);
+drawSingleNode(x1, ch1b.x, ch1b.y, childR, purple);
+drawTwoColorNode(x1, ch1c.x, ch1c.y, childR, purple, blue);
+
+// ========== 图2：多源点扇形分割 ==========
+const c2 = document.getElementById('canvas2');
+const x2 = c2.getContext('2d');
+x2.fillStyle = BG; x2.fillRect(0, 0, c2.width, c2.height);
+
+const s2a = {x:80,y:70}, s2b = {x:220,y:50}, s2c = {x:360,y:70};
+const ch2a = {x:220,y:190}, ch2b = {x:120,y:260}, ch2c = {x:320,y:260};
+
+link(x2,s2a.x,s2a.y,ch2a.x,ch2a.y, LINK_COLOR); link(x2,s2b.x,s2b.y,ch2a.x,ch2a.y, LINK_COLOR); link(x2,s2c.x,s2c.y,ch2a.x,ch2a.y, LINK_COLOR);
+link(x2,s2a.x,s2a.y,ch2b.x,ch2b.y, LINK_COLOR); link(x2,s2b.x,s2b.y,ch2b.x,ch2b.y, LINK_COLOR);
+link(x2,s2b.x,s2b.y,ch2c.x,ch2c.y, LINK_COLOR); link(x2,s2c.x,s2c.y,ch2c.x,ch2c.y, LINK_COLOR);
+
+drawSingleNode(x2, s2a.x, s2a.y, srcR, purple);
+drawSingleNode(x2, s2b.x, s2b.y, srcR, blue);
+drawSingleNode(x2, s2c.x, s2c.y, srcR, green);
+drawMultiColorNode(x2, ch2a.x, ch2a.y, childR + 4, [purple, blue, green]);
+drawTwoColorNode(x2, ch2b.x, ch2b.y, childR, purple, blue);
+drawTwoColorNode(x2, ch2c.x, ch2c.y, childR, blue, green);
+
+// ========== 图3：分步动画 ==========
+const c3 = document.getElementById('canvas3');
+const ctx3 = c3.getContext('2d');
+const stepLabel = document.getElementById('stepLabel');
+
+const nd = {
+  S_A:  { x: 120, y: 65,  r: bigSrcR,   label: 'S_A' },
+  S_B:  { x: 410, y: 65,  r: bigSrcR,   label: 'S_B' },
+  S_C:  { x: 700, y: 65,  r: bigSrcR,   label: 'S_C' },
+  A1:   { x: 280, y: 240, r: bigChildR, label: 'A1' },
+  B1:   { x: 350, y: 240, r: bigChildR, label: 'B1' },
+  C1:   { x: 560, y: 240, r: bigChildR, label: 'C1' },
+  a1:   { x: 100, y: 570, r: bigChildR, label: 'a1' },
+  a2:   { x: 240, y: 570, r: bigChildR, label: 'a2' },
+  a3:   { x: 410, y: 570, r: bigChildR, label: 'a3' },
+};
+
+// 每步：{ label, nodes: [{id, colors}], arrows: [{from, to, bidi}] }
+const steps = [
+  {
+    label: 'Step 1: Identify source nodes',
+    nodes: [
+      { id: 'S_A', colors: [YELLOW] },
+      { id: 'S_B', colors: [RED] },
+      { id: 'S_C', colors: [CYAN] },
+    ],
+    arrows: [],
+  },
+  {
+    label: 'Step 2: Source out-links → non-source',
+    nodes: [
+      { id: 'S_A', colors: [YELLOW] },
+      { id: 'S_B', colors: [RED] },
+      { id: 'S_C', colors: [CYAN] },
+      { id: 'A1',  colors: [YELLOW] },   // S_A → A1
+      { id: 'B1',  colors: [RED] },      // S_B → B1
+      { id: 'C1',  colors: [CYAN] },     // S_C → C1
+    ],
+    arrows: [
+      { from: 'S_A', to: 'A1', bidi: false },
+      { from: 'S_B', to: 'B1', bidi: false },
+      { from: 'S_C', to: 'C1', bidi: false },
+    ],
+  },
+  {
+    label: 'Step 2b: B1 ↔ C1 bidirectional → both become 2-color',
+    nodes: [
+      { id: 'S_A', colors: [YELLOW] },
+      { id: 'S_B', colors: [RED] },
+      { id: 'S_C', colors: [CYAN] },
+      { id: 'A1',  colors: [YELLOW] },
+      { id: 'B1',  colors: [RED, CYAN] },    // B1 gets S_C from C1
+      { id: 'C1',  colors: [CYAN, RED] },     // C1 gets S_B from B1
+    ],
+    arrows: [
+      { from: 'S_A', to: 'A1', bidi: false },
+      { from: 'S_B', to: 'B1', bidi: false },
+      { from: 'S_C', to: 'C1', bidi: false },
+      { from: 'B1', to: 'C1', bidi: true, highlight: true },
+    ],
+  },
+  {
+    label: 'Step 3: BFS — A1 → children',
+    nodes: [
+      { id: 'S_A', colors: [YELLOW] },
+      { id: 'S_B', colors: [RED] },
+      { id: 'S_C', colors: [CYAN] },
+      { id: 'A1',  colors: [YELLOW] },
+      { id: 'B1',  colors: [RED, CYAN] },
+      { id: 'C1',  colors: [CYAN, RED] },
+      { id: 'a1',  colors: [YELLOW] },
+      { id: 'a2',  colors: [YELLOW] },
+      { id: 'a3',  colors: [YELLOW] },
+    ],
+    arrows: [
+      { from: 'S_A', to: 'A1', bidi: false },
+      { from: 'S_B', to: 'B1', bidi: false },
+      { from: 'S_C', to: 'C1', bidi: false },
+      { from: 'B1', to: 'C1', bidi: true },
+      { from: 'A1', to: 'a1', bidi: true, highlight: true },
+      { from: 'A1', to: 'a2', bidi: true, highlight: true },
+      { from: 'A1', to: 'a3', bidi: true, highlight: true },
+    ],
+  },
+  {
+    label: 'Step 3b: B1 → a2,a3; a2 → A1,B1',
+    nodes: [
+      { id: 'S_A', colors: [YELLOW] },
+      { id: 'S_B', colors: [RED] },
+      { id: 'S_C', colors: [CYAN] },
+      { id: 'A1',  colors: [YELLOW, RED] },        // A1 gets S_B from a2
+      { id: 'B1',  colors: [RED, CYAN, YELLOW] },   // B1 gets S_A from a2
+      { id: 'C1',  colors: [CYAN, RED] },
+      { id: 'a1',  colors: [YELLOW] },
+      { id: 'a2',  colors: [YELLOW, RED] },          // a2 gets S_B from B1
+      { id: 'a3',  colors: [YELLOW, RED] },           // a3 gets S_B from B1
+    ],
+    arrows: [
+      { from: 'S_A', to: 'A1', bidi: false },
+      { from: 'S_B', to: 'B1', bidi: false },
+      { from: 'S_C', to: 'C1', bidi: false },
+      { from: 'B1', to: 'C1', bidi: true },
+      { from: 'A1', to: 'a1', bidi: true },
+      { from: 'A1', to: 'a2', bidi: true },
+      { from: 'A1', to: 'a3', bidi: true },
+      { from: 'B1', to: 'a2', bidi: true, highlight: true },
+      { from: 'B1', to: 'a3', bidi: true, highlight: true },
+      { from: 'a2', to: 'A1', bidi: true, highlight: true },
+      { from: 'a2', to: 'B1', bidi: true, highlight: true },
+    ],
+  },
+  {
+    label: 'Step 3c: C1 → a3; a3 → A1, C1',
+    nodes: [
+      { id: 'S_A', colors: [YELLOW] },
+      { id: 'S_B', colors: [RED] },
+      { id: 'S_C', colors: [CYAN] },
+      { id: 'A1',  colors: [YELLOW, RED, CYAN] },   // A1 gets S_C from a3
+      { id: 'B1',  colors: [RED, CYAN, YELLOW] },
+      { id: 'C1',  colors: [CYAN, RED, YELLOW] },    // C1 gets S_A from a3
+      { id: 'a1',  colors: [YELLOW] },
+      { id: 'a2',  colors: [YELLOW, RED] },
+      { id: 'a3',  colors: [YELLOW, RED, CYAN] },    // a3 gets S_C from C1
+    ],
+    arrows: [
+      { from: 'S_A', to: 'A1', bidi: false },
+      { from: 'S_B', to: 'B1', bidi: false },
+      { from: 'S_C', to: 'C1', bidi: false },
+      { from: 'B1', to: 'C1', bidi: true },
+      { from: 'A1', to: 'a1', bidi: true },
+      { from: 'A1', to: 'a2', bidi: true },
+      { from: 'A1', to: 'a3', bidi: true },
+      { from: 'B1', to: 'a2', bidi: true },
+      { from: 'B1', to: 'a3', bidi: true },
+      { from: 'C1', to: 'a3', bidi: true, highlight: true },
+      { from: 'a3', to: 'A1', bidi: true, highlight: true },
+      { from: 'a3', to: 'C1', bidi: true, highlight: true },
+    ],
+  },
+];
+
+function renderStep(idx) {
+  const step = steps[idx];
+  ctx3.fillStyle = BG;
+  ctx3.fillRect(0, 0, c3.width, c3.height);
+
+  stepLabel.textContent = step.label;
+
+  // draw arrows
+  for (const a of step.arrows) {
+    const nf = nd[a.from], nt = nd[a.to];
+    const color = a.highlight ? 'rgba(255,220,100,0.5)' : (a.bidi ? BIDI_COLOR : LINK_COLOR);
+    if (a.bidi) {
+      drawBiArrow(ctx3, nf.x, nf.y, nf.r, nt.x, nt.y, nt.r, color);
+    } else {
+      drawArrow(ctx3, nf.x, nf.y, nf.r, nt.x, nt.y, nt.r, color);
+    }
+  }
+
+  // draw nodes
+  const nodeMap = {};
+  for (const n of step.nodes) nodeMap[n.id] = n.colors;
+  for (const [id, info] of Object.entries(nd)) {
+    if (!nodeMap[id]) continue;
+    drawColoredNode(ctx3, info.x, info.y, info.r, nodeMap[id]);
+    drawLabel(ctx3, info.x, info.y, info.label);
+  }
+
+  // legend
+  ctx3.save();
+  ctx3.font = '11px monospace';
+  ctx3.textAlign = 'left';
+  ctx3.textBaseline = 'top';
+  ctx3.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx3.fillText('→  source → non-source', 20, 630);
+  ctx3.fillText('↔  bidirectional (non-source ↔ non-source)', 20, 648);
+  ctx3.restore();
+}
+
+let animTimer = null;
+let currentStep = 0;
+
+function startAnimation() {
+  currentStep = 0;
+  clearInterval(animTimer);
+  renderStep(currentStep);
+  animTimer = setInterval(() => {
+    currentStep++;
+    if (currentStep >= steps.length) {
+      clearInterval(animTimer);
+      return;
+    }
+    renderStep(currentStep);
+  }, 2000);
+}
+
+document.getElementById('replayBtn').addEventListener('click', startAnimation);
+startAnimation();
+
+</script>
+</body>
+</html>
