@@ -112,11 +112,9 @@ export class SourceDetector {
      */
     private propagateSources(): void {
         const queue: string[] = [];
-        const visited = new Set<string>();
 
         for (const path of this.childMap.keys()) {
             queue.push(path);
-            visited.add(path);
         }
 
         while (queue.length > 0) {
@@ -148,8 +146,7 @@ export class SourceDetector {
                     }
                 }
 
-                if (changed && !visited.has(resolvedPath)) {
-                    visited.add(resolvedPath);
+                if (changed) {
                     queue.push(resolvedPath);
                 }
             }
