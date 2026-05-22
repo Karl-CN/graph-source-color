@@ -6,3 +6,8 @@ main.js
 
 # Obsidian plugin data
 data.json
+
+# Local dev docs (not for public repo)
+CLAUDE.md
+COLOR_LOGIC.md
+RELEASE_GUIDE.md
