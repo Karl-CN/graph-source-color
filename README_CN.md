@@ -55,7 +55,7 @@ Obsidian 图谱节点动态着色插件。根据笔记关联的"源点"种类，
 
 ### 演示
 
-[查看交互式演示](https://htmlpreview.github.io/?https://raw.githubusercontent.com/Karl-CN/graph-source-color/main/demo.html) — 分步动画展示源点颜色如何沿链接传播。
+[查看交互式演示](https://karl-cn.github.io/graph-source-color/demo.html) — 分步动画展示源点颜色如何沿链接传播。
 
 ## 命令
 

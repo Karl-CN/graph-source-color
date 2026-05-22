@@ -53,7 +53,7 @@ Notes inside configured **source folders** are automatically treated as source n
 
 ## Demo
 
-[View the interactive demo](https://htmlpreview.github.io/?https://raw.githubusercontent.com/Karl-CN/graph-source-color/main/demo.html) — Step-by-step animation showing how source colors propagate through links.
+[View the interactive demo](https://karl-cn.github.io/graph-source-color/demo.html) — Step-by-step animation showing how source colors propagate through links.
 
 ## Commands
 
