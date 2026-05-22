@@ -1,2 +1,8 @@
 node_modules/
 .claude/
+
+# Build output — distributed via GitHub Releases
+main.js
+
+# Obsidian plugin data
+data.json

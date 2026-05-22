@@ -1,87 +1,86 @@
 # Graph Source Color
 
-Obsidian 图谱节点动态着色插件。根据笔记关联的"源点"种类，在图谱视图中显示多色节点。
+An Obsidian plugin that dynamically colors graph nodes based on their linked "source" notes.
 
-## 功能特性
+## Features
 
-- **源点检测**：自动识别指定文件夹下的源点笔记（通过 frontmatter 的 `group` 字段分类）
-- **关联计算**：递归查找笔记链接的所有源点，支持直接链接和反向链接
-- **多色渲染**：
-  - 双源点 → 左右分割
-  - 多源点 → 扇形分割
-- **只读 graph.json**：不修改 Obsidian 原生配置文件
+- **Source Detection** — Automatically identifies source notes within configured folders. Each folder becomes a color group.
+- **Link Propagation** — Recursively traces outgoing and incoming links to associate notes with their relevant sources. Linked notes inherit source colors through BFS propagation.
+- **Multi-Color Nodes** — Notes linked to multiple sources display split-color nodes:
+  - 2 sources → left/right split
+  - 3+ sources → pie-chart split
+- **Read-Only** — Does not modify Obsidian's native `graph.json` configuration.
+- **Folder Tree Selector** — Visual folder picker in settings for easy source folder configuration.
+- **Color Inheritance** — Parent folder colors cascade to sub-folders that don't have an explicit color set.
 
-## 安装
+## Installation
 
-1. 下载 `main.js` 和 `manifest.json` 两个文件
-2. 复制到 Obsidian 插件目录：
-   ```
-   <vault>/.obsidian/plugins/graph-source-color/
-   ├── manifest.json
-   └── main.js
-   ```
-3. 重启 Obsidian，在设置中启用 "Graph Source Color" 插件
+### From Obsidian Community Plugins (pending approval)
 
-## 配置
+1. Open Settings → Community Plugins
+2. Search for "Graph Source Color"
+3. Install and enable
 
-在 Obsidian 设置 → "图谱源点着色设置" 中配置：
+### Manual Installation
 
-| 设置项 | 默认值 | 说明 |
-|--------|--------|------|
-| sourceFolder | wiki/sources | 源点文件夹路径 |
-| enableMultiColor | true | 启用多色节点 |
+1. Download `main.js` and `manifest.json` from the [latest release](https://github.com/Karl-CN/obsidian-graph-source-color/releases)
+2. Copy both files to your vault: `<vault>/.obsidian/plugins/graph-source-color/`
+3. Restart Obsidian and enable the plugin in Settings → Community Plugins
 
-源节点颜色请在 Obsidian 图谱设置中修改，修改后子节点颜色会自动联动。
+## Configuration
 
-## 源点笔记格式
+Open Settings → "Graph Source Color" to configure:
 
-源点笔记需放在 `sourceFolder` 指定的目录下，并在 frontmatter 中定义 `group` 字段：
+| Setting | Default | Description |
+|---------|---------|-------------|
+| Enable Multi-Color Nodes | true | Show split-color nodes for notes linked to multiple sources |
+| Source Folders | — | Folders containing source notes (each folder = one color group) |
+| Group Colors | auto-assigned | Color for each source folder |
 
-```yaml
----
-title: 2026年政府工作报告
-group: gov-report
----
+**Note:** Source folder colors can also be set in Obsidian's native graph settings (color groups with `path:` queries). The plugin will read and respect those colors.
 
-笔记内容...
-```
+## How It Works
 
-## 关联检测逻辑
+### Source Identification
 
-1. **出链方向**：源点笔记链接到的笔记，自动关联该源点
-2. **入链方向**：非源点笔记链接到源点，自动关联该源点
-3. **传播**：已关联源点的笔记，其出链指向的笔记也继承该源点
+Notes inside configured **source folders** are automatically treated as source notes. Their group is determined by the folder they belong to.
 
-示例：
-```
-新质生产力.md
-  └── links to → 政府工作报告.md (group: gov-report)
-  └── links to → 4月经济工作会议.md (group: april-meeting)
+### Association Logic
 
-结果：新质生产力 显示双色
-```
+1. **Outgoing links** — A source note's outgoing links associate the target note with that source
+2. **Incoming links** — A non-source note linking to a source becomes associated with that source
+3. **Propagation** — Notes already associated with sources propagate those associations through their own outgoing links (BFS)
 
-## 文件结构
+### Example
 
 ```
-graph-source-color/
-├── main.ts              # 插件入口，overlay 渲染
-├── sourceDetector.ts    # 源点检测，关联计算
-├── colorManager.ts      # 颜色缓存管理
-├── manifest.json        # 插件清单
-├── package.json         # 依赖配置
-├── tsconfig.json        # TypeScript 配置
-├── esbuild.config.mjs   # 构建配置
-└── README.md
+Industry-Analysis.md
+  └── links to → Government-Report.md (source: folder "gov-docs")
+  └── links to → April-Meeting.md   (source: folder "meetings")
+
+Result: "Industry-Analysis" displays a two-color split node
 ```
 
-## 开发
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| Refresh Graph Colors | Rebuild color cache and re-render overlay |
+| Debug Graph Nodes | Output node color info to developer console |
+
+## Compatibility
+
+- Minimum Obsidian version: 0.15.0
+- Desktop and mobile supported
+
+## Development
 
 ```bash
 npm install
-npm run build
+npm run dev    # Watch mode
+npm run build  # Production build
 ```
 
-## 许
+## License
 
-MIT
+[MIT](LICENSE)

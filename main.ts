@@ -99,16 +99,16 @@ export default class GraphSourceColorPlugin extends Plugin {
 
 		this.addCommand({
 			id: 'refresh-graph-colors',
-			name: '刷新图谱颜色',
+			name: '刷新图谱颜色 / Refresh Graph Colors',
 			callback: () => {
 				if (this.colorManager) this.colorManager.refresh();
-				new Notice('图谱颜色已刷新');
+				new Notice('图谱颜色已刷新 / Graph colors refreshed');
 			}
 		});
 
 		this.addCommand({
 			id: 'debug-graph-nodes',
-			name: '调试图谱节点',
+			name: '调试图谱节点 / Debug Graph Nodes',
 			callback: () => this.debugGraphNodes()
 		});
 
@@ -639,7 +639,7 @@ export default class GraphSourceColorPlugin extends Plugin {
 			console.log(`Overlay canvas "${key}": ${canvas.width}x${canvas.height}`);
 		}
 
-		new Notice('调试信息已输出到控制台');
+		new Notice('调试信息已输出到控制台 / Debug info output to console');
 	}
 }
 
@@ -657,11 +657,11 @@ class GraphSourceColorSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
-		containerEl.createEl('h2', { text: '图谱源点着色设置' });
+		containerEl.createEl('h2', { text: '图谱源点着色设置 / Graph Source Color Settings' });
 
 		new Setting(containerEl)
-			.setName('启用多色节点')
-			.setDesc('为链接多个源点的笔记显示多色节点')
+			.setName('启用多色节点 / Enable Multi-Color Nodes')
+			.setDesc('为链接多个源点的笔记显示多色节点 / Show split-color nodes for notes linked to multiple sources')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.enableMultiColor)
 				.onChange(async (value) => {
@@ -669,9 +669,9 @@ class GraphSourceColorSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
-		containerEl.createEl('h3', { text: '源点文件夹' });
+		containerEl.createEl('h3', { text: '源点文件夹 / Source Folders' });
 		containerEl.createEl('p', {
-			text: '选择包含源点笔记的文件夹，每个文件夹对应一种颜色分组',
+			text: '选择包含源点笔记的文件夹，每个文件夹对应一种颜色分组 / Select folders containing source notes, each folder maps to one color group',
 			cls: 'setting-item-description'
 		});
 
@@ -689,9 +689,9 @@ class GraphSourceColorSettingTab extends PluginSettingTab {
 			this.display();
 		};
 
-		containerEl.createEl('h3', { text: '分组颜色' });
+		containerEl.createEl('h3', { text: '分组颜色 / Group Colors' });
 		containerEl.createEl('p', {
-			text: '为源点文件夹设置颜色，源点节点和子节点都会使用对应颜色',
+			text: '为源点文件夹设置颜色，源点节点和子节点都会使用对应颜色 / Set colors for source folders, both source and child nodes will use the assigned color',
 			cls: 'setting-item-description'
 		});
 
