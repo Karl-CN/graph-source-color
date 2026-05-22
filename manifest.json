@@ -3,7 +3,7 @@
   "name": "Graph Source Color",
   "version": "1.1.0",
   "minAppVersion": "0.15.0",
-  "description": "根据源点笔记动态着色图谱节点",
+  "description": "Dynamic graph node coloring based on linked source notes. Supports multi-color split nodes, BFS propagation, and folder-based color groups.",
   "author": "Karl",
   "authorUrl": "https://github.com/Karl-CN",
   "isDesktopOnly": false
