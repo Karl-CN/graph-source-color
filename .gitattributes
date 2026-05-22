@@ -1,5 +1,4 @@
 # 开发文件，下载 ZIP 时排除
-*.ts export-ignore
 esbuild.config.mjs export-ignore
 package.json export-ignore
 package-lock.json export-ignore
