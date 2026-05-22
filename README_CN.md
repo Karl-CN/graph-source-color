@@ -53,15 +53,9 @@ Obsidian 图谱节点动态着色插件。根据笔记关联的"源点"种类，
 2. **入链方向** — 非源点笔记链接到源点，自动关联该源点
 3. **传播** — 已关联源点的笔记，通过其出链继续传播源点关系（BFS）
 
-### 示例
+### 演示
 
-```
-行业分析.md
-  └── links to → 政府工作报告.md (源点: 文件夹 "gov-docs")
-  └── links to → 四月经济会议.md (源点: 文件夹 "meetings")
-
-结果："行业分析" 显示双色分割节点
-```
+[查看交互式演示](https://htmlpreview.github.io/?https://raw.githubusercontent.com/Karl-CN/graph-source-color/main/demo.html) — 分步动画展示源点颜色如何沿链接传播。
 
 ## 命令
 

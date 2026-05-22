@@ -51,19 +51,9 @@ Notes inside configured **source folders** are automatically treated as source n
 2. **Incoming links** — A non-source note linking to a source becomes associated with that source
 3. **Propagation** — Notes already associated with sources propagate those associations through their own outgoing links (BFS)
 
-### Example
-
-```
-Industry-Analysis.md
-  └── links to → Government-Report.md (source: folder "gov-docs")
-  └── links to → April-Meeting.md   (source: folder "meetings")
-
-Result: "Industry-Analysis" displays a two-color split node
-```
-
 ## Demo
 
-[View the interactive demo](demo.html) — Step-by-step animation showing how source colors propagate through links.
+[View the interactive demo](https://htmlpreview.github.io/?https://raw.githubusercontent.com/Karl-CN/graph-source-color/main/demo.html) — Step-by-step animation showing how source colors propagate through links.
 
 ## Commands
 
