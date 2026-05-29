@@ -27,7 +27,7 @@ An Obsidian plugin that dynamically colors graph nodes based on their linked "so
 
 ### Manual Installation
 
-1. Download `main.js` and `manifest.json` from the [latest release](https://github.com/Karl-CN/graph-source-color/releases)
+1. Download `main.js`, `manifest.json` and `styles.css` from the [latest release](https://github.com/Karl-CN/graph-source-color/releases)
 2. Copy both files to your vault: `<vault>/.obsidian/plugins/graph-source-color/`
 3. Restart Obsidian and enable the plugin in Settings → Community Plugins
 

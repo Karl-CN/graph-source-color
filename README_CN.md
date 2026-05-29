@@ -29,7 +29,7 @@ Obsidian 图谱节点动态着色插件。根据笔记关联的"源点"种类，
 
 ### 手动安装
 
-1. 从 [最新 Release](https://github.com/Karl-CN/graph-source-color/releases) 下载 `main.js` 和 `manifest.json`
+1. 从 [最新 Release](https://github.com/Karl-CN/graph-source-color/releases) 下载 `main.js`、`manifest.json` 和 `styles.css`
 2. 将两个文件复制到 Vault 目录：`<vault>/.obsidian/plugins/graph-source-color/`
 3. 重启 Obsidian，在 设置 → 第三方插件 中启用
 
