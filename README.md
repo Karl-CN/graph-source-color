@@ -2,6 +2,10 @@
 
 An Obsidian plugin that dynamically colors graph nodes based on their linked "source" notes.
 
+## Demo
+
+[View the interactive demo](https://karl-cn.github.io/graph-source-color/demo.html) — Step-by-step animation showing how source colors propagate through links.
+
 ## Features
 
 - **Source Detection** — Automatically identifies source notes within configured folders. Each folder becomes a color group.
@@ -15,7 +19,7 @@ An Obsidian plugin that dynamically colors graph nodes based on their linked "so
 
 ## Installation
 
-### From Obsidian Community Plugins (pending approval)
+### From Obsidian Community Plugins
 
 1. Open Settings → Community Plugins
 2. Search for "Graph Source Color"
@@ -23,7 +27,7 @@ An Obsidian plugin that dynamically colors graph nodes based on their linked "so
 
 ### Manual Installation
 
-1. Download `main.js` and `manifest.json` from the [latest release](https://github.com/Karl-CN/obsidian-graph-source-color/releases)
+1. Download `main.js` and `manifest.json` from the [latest release](https://github.com/Karl-CN/graph-source-color/releases)
 2. Copy both files to your vault: `<vault>/.obsidian/plugins/graph-source-color/`
 3. Restart Obsidian and enable the plugin in Settings → Community Plugins
 
@@ -50,10 +54,6 @@ Notes inside configured **source folders** are automatically treated as source n
 1. **Outgoing links** — A source note's outgoing links associate the target note with that source
 2. **Incoming links** — A non-source note linking to a source becomes associated with that source
 3. **Propagation** — Notes already associated with sources propagate those associations through their own outgoing links (BFS)
-
-## Demo
-
-[View the interactive demo](https://karl-cn.github.io/graph-source-color/demo.html) — Step-by-step animation showing how source colors propagate through links.
 
 ## Commands
 
