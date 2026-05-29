@@ -4,6 +4,10 @@
 
 Obsidian 图谱节点动态着色插件。根据笔记关联的"源点"种类，在图谱视图中显示多色节点。
 
+## 演示
+
+[查看交互式演示](https://karl-cn.github.io/graph-source-color/demo.html) — 分步动画展示源点颜色如何沿链接传播。
+
 ## 功能特性
 
 - **源点检测** — 自动识别指定文件夹下的源点笔记，每个文件夹对应一种颜色分组
@@ -17,7 +21,7 @@ Obsidian 图谱节点动态着色插件。根据笔记关联的"源点"种类，
 
 ## 安装
 
-### 从 Obsidian 社区插件市场安装（待审核）
+### 从 Obsidian 社区插件市场安装
 
 1. 打开 设置 → 第三方插件
 2. 搜索 "Graph Source Color"
@@ -25,7 +29,7 @@ Obsidian 图谱节点动态着色插件。根据笔记关联的"源点"种类，
 
 ### 手动安装
 
-1. 从 [最新 Release](https://github.com/Karl-CN/obsidian-graph-source-color/releases) 下载 `main.js` 和 `manifest.json`
+1. 从 [最新 Release](https://github.com/Karl-CN/graph-source-color/releases) 下载 `main.js` 和 `manifest.json`
 2. 将两个文件复制到 Vault 目录：`<vault>/.obsidian/plugins/graph-source-color/`
 3. 重启 Obsidian，在 设置 → 第三方插件 中启用
 
@@ -52,10 +56,6 @@ Obsidian 图谱节点动态着色插件。根据笔记关联的"源点"种类，
 1. **出链方向** — 源点笔记链接到的笔记，自动关联该源点
 2. **入链方向** — 非源点笔记链接到源点，自动关联该源点
 3. **传播** — 已关联源点的笔记，通过其出链继续传播源点关系（BFS）
-
-### 演示
-
-[查看交互式演示](https://karl-cn.github.io/graph-source-color/demo.html) — 分步动画展示源点颜色如何沿链接传播。
 
 ## 命令
 
