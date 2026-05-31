@@ -1,6 +1,8 @@
-# Graph Source Color
+# Graph Source Color 图叙经纬
 
 [English](README.md) | 中文
+
+绘本始之色，明脉络之形。
 
 Obsidian 图谱节点动态着色插件。根据笔记关联的"源点"种类，在图谱视图中显示多色节点。
 
